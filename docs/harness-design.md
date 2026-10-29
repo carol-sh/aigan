@@ -1,9 +1,12 @@
 # 지속형 예약 에이전트 하네스 (aigan-harness) 설계 문서
 
-> 버전: 2.3
+> 버전: 2.4
 > 상태: 구현 설계 확정. 콘텐츠(프롬프트)는 운영자 소유.
 > 범위: 예약 기반으로 스스로 깨어나 사용자와 상호작용하는 지속형 에이전트 하네스. 프롬프트 내용은 이 문서의 범위 밖이며, §6의 콘텐츠 계약을 따른다.
 > 전제: 개인 서버 설치형, 단일 사용자. 텔레그램 FE.
+
+**2.4 변경 요약**
+- `agent`·`blackout`으로 닫힐 때 버퍼에 남은 user 메시지(답하지 못한 것)는 버리지 않고 `pending` 인바운드로 옮긴다. `finish()`가 인바운드 흐름을 열어 답한다(§9 `close_flow`, §10).
 
 **2.3 변경 요약**
 - 흐름 닫기를 원자 연산 `close_flow(reason)` 하나로 정의. 모든 경로가 pending self 행을 상태 무관하게 지운다(`/pause` 뒤 유령 흐름 수정, §9).
@@ -285,7 +288,7 @@ self-reserve 판정은 id 기반(부록 B).
 
 | 전이 | 조건 |
 |---|---|
-| `pending` | 수신(흐름 없음). 블랙아웃 중에도 저장(§10) |
+| `pending` | 수신(흐름 없음). 블랙아웃 중에도 저장(§10). 또는 `close_flow`가 답하지 못한 버퍼 메시지를 옮김(§9) |
 | `consumed` | 인바운드 흐름 개시 시 전부 소비 표시. `consumed_flow_id` 기록 |
 | `expired` | 만료 검사(시간 초과 또는 N건 초과 시 오래된 것부터) |
 
@@ -301,7 +304,7 @@ self-reserve 판정은 id 기반(부록 B).
 
 ### 5.6 메시지 (`messages`)
 
-`id`, `flow_id`, `role`(user/assistant), `content`, `ts`, `ignored`(0/1), `ignored_reason`(ended/paused/late/undelivered), `sent_at`(assistant만, NULL=미전송), `tg_message_id`(assistant만, 전송 성공 시), `turn_seq`(assistant만, 커밋 시점의 `flows.turn_count`. 한 턴의 메시지를 묶는다).
+`id`, `flow_id`, `role`(user/assistant), `content`, `ts`, `ignored`(0/1), `ignored_reason`(paused/late/moved/undelivered), `sent_at`(assistant만, NULL=미전송), `tg_message_id`(assistant만, 전송 성공 시), `turn_seq`(assistant만, 커밋 시점의 `flows.turn_count`. 한 턴의 메시지를 묶는다).
 
 **outbox**: assistant 메시지는 `TurnTx` 안에서 `sent_at=NULL`로 저장되고, 커밋 뒤 전송이 성공할 때마다 하나씩 `sent_at`·`tg_message_id`를 채운다. 재시작 시 `sent_at IS NULL`인 assistant 행을 `id` 순으로 재전송한다(§15.2). 텔레그램 ack와 마킹 사이 크래시만 중복을 낳는다.
 
@@ -549,7 +552,9 @@ self 예약은 생성 시 블랙아웃 보정을 받지 않는다(§5.1). 블랙
 1. `pending_self_reservation_id` 행 삭제(`scheduled`·`fired` 무관).
 2. `ended_at=now`, `end_reason=reason`.
 3. `cleanup_status`: `reason='cancelled'`이거나 `cleanup-rules.md`가 없으면 `skipped`, 아니면 `pending` + `cleanup_next_at=now`, `cleanup_attempts=0`.
-4. 버퍼에 남은 user 메시지를 `ignored=1`로: `paused`·`cancelled`면 `ignored_reason='late'`, `agent`·`blackout`이면 `'ended'`. 버퍼 비움, 디바운스 타이머 취소.
+4. 버퍼에 남은 user 메시지(이 흐름이 답하지 못한 것) 처리. 버퍼 비움, 디바운스 타이머 취소.
+   - `paused`·`cancelled`: `ignored=1, ignored_reason='late'`. 사용자가 멈추라고 했으므로 답하지 않는다.
+   - `agent`·`blackout`: 각 메시지를 `inbound_messages`에 `pending`으로 복사(`received_at`=원래 `ts`)하고, 원래 행은 `ignored=1, ignored_reason='moved'`. 흐름 컨텍스트에서는 빠지고, `finish()`가 인바운드 개시 예약을 만들어 다음 인바운드 흐름이 답한다. 블랙아웃 중이면 그 예약은 블랙아웃 끝으로 밀린다(§5.1).
 5. `current_flow_id=NULL`, `pending_self_reservation_id=NULL`.
 
 정리(`pending`이면)는 커밋·전송 뒤 워커가 동기로 한 번 시도한다. 실패해도 `cleanup_next_at`이 있으므로 `cleanup_timer`가 잇는다.
@@ -876,6 +881,7 @@ finish():
 | 트리거 예약 삭제를 `TurnTx` 안에서 | 커밋 전 크래시에 옛 self가 살아남아 (d)가 유지된다 |
 | 명령은 즉시 + 워커 위임 | 정리(LLM 호출)와 흐름 개시를 `command_handler`가 하면 워커와 동시에 돈다(원칙 1 위반). 세대 카운터만 즉시 올린다 |
 | `system_catchup` | 흐름이 블랙아웃을 넘겨 이어지면 플랜이 무기한 밀린다. 워커가 직렬이라 턴 사이 실행에 경합이 없다 |
+| 닫힌 흐름의 미응답 메시지는 인바운드로 | LLM 호출 중 도착한 말을 흐름이 `end`로 닫히며 버리면 "지속" 에이전트가 사용자의 말을 무시하게 된다. `received_at`을 원래 시각으로 두므로 `inbound_ttl` 만료 규칙이 그대로 적용된다 |
 | `close_flow` 단일 연산 | 닫는 경로가 다섯이라 경로마다 적으면 빠진다. v2.2의 `/pause`가 self 행을 지우지 않아 재개 후 payload 없는 deadline 예약이 흐름을 여는 버그가 그 예다 |
 | 정리 재시도를 DB + `cleanup_timer`로 | 큐 이벤트는 paused에서 버려지고 재시작에 사라진다. 다른 재시도 상태는 모두 DB에 있는데 정리만 예외였다. `finish()`에 넣으면 방금 실패한 정리를 백오프 없이 재시도한다 |
 | 세대 비교를 모든 종료 경로에서 먼저 | abort는 예외로 끝나 파싱 직후 비교에 닿지 않는다. 실패 경로가 닫힐 흐름에 백오프 self를 만들고 `failure_count`를 올린다 |
@@ -975,3 +981,6 @@ finish():
 | 74 | 블랙아웃 중 `/resume`, 플랜 미완 | 즉시 플랜 |
 | 75 | `fired` 인바운드 예약 대기 중 디바운스 만료(흐름 없음) | 새 인바운드 예약 만들지 않음 |
 | 76 | 정지 상태에서 `/pause` · `/cancel` | 안내만, 세대 카운터 불변 |
+| 77 | `flow=end` 턴의 LLM 호출 중 user 메시지 도착 | 원래 행 `moved`, `pending` 인바운드 생성, `finish()`가 인바운드 예약 → 인바운드 흐름이 답함 |
+| 78 | 위 상황이 블랙아웃 중 | 인바운드 예약이 블랙아웃 끝으로 밀림 |
+| 79 | `/cancel` 시 버퍼 메시지 | `late`, 인바운드로 옮기지 않음 |
