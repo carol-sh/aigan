@@ -1,9 +1,19 @@
 # 지속형 예약 에이전트 하네스 (aigan-harness) 설계 문서
 
-> 버전: 2.0
+> 버전: 2.1
 > 상태: 구현 설계 확정. 콘텐츠(프롬프트)는 운영자 소유.
 > 범위: 예약 기반으로 스스로 깨어나 사용자와 상호작용하는 지속형 에이전트 하네스. 프롬프트 내용은 이 문서의 범위 밖이며, §6의 콘텐츠 계약을 따른다.
 > 전제: 개인 서버 설치형, 단일 사용자. 텔레그램 FE.
+
+**2.1 변경 요약**
+- 플랜·압축은 도구 없음. `memory_read`는 턴·정리만. 플랜 입력은 INDEX 대신 `state.md`.
+- 불변식을 타이머 조준 (a)(b)(c) + 열린 흐름의 self 예약 (d)로 재정의(§8).
+- `flows.turn_count` 추가. `consume_random`은 첫 턴 커밋에서 같은 트랜잭션으로 감소.
+- `due_keep`은 예약을 지우지 않는다. deadline 흐름의 reserve는 `pool_id` 상속, judged된 항목이면 폐기.
+- 초기값 명시, 첫 실행 절차(§15.1).
+- `TurnTx`가 reserve·흐름 닫기까지 포함. 전송은 커밋 뒤 outbox(`sent_at`)로.
+- 블랙아웃은 "먼저 말 걸기"만 금지. 활성 흐름 응답은 처리, 흐름 없는 인바운드는 아침에 처리. self 예약은 블랙아웃 보정 없이, 블랙아웃 중 발화하면 응답이 없을 때 흐름을 닫는다.
+- continue의 무효 `reserve.prompt`는 `flows.prompt`로 대체. 실패 백오프는 self 예약.
 
 ---
 
@@ -18,7 +28,7 @@
 ### 1.2 원칙
 
 1. **직렬성은 구조로 보장한다.** 워커가 하나라서 동시성 문제가 없다. 수신 핸들러는 큐를 거치지 않고 버퍼에만 쓴다.
-2. **불변식은 하네스가 강제한다.** "정지가 아니면 최소 1개 예약", "블랙아웃에는 발화하지 않음", "활성 흐름 최대 1개"는 프롬프트 부탁이 아니라 코드다.
+2. **불변식은 하네스가 강제한다.** 타이머 조준, "활성 흐름 최대 1개", "열린 흐름은 항상 다음 턴 예약을 가진다"(§8), "블랙아웃에는 먼저 말을 걸지 않음"은 프롬프트 부탁이 아니라 코드다.
 3. **나머지는 LLM 재량이다.** 무엇을 시킬지, 어떻게 판정할지, 언제 다시 깨어날지는 하네스가 관여하지 않는다.
 4. **읽기는 즉시, 쓰기는 트랜잭션.** 도구의 읽기는 결과를 바로 돌려주고, 상태 변경은 턴 성공 시 일괄 반영한다.
 5. **하네스는 콘텐츠를 모른다.** 예약 행의 `prompt`는 파일 경로이고, 하네스는 그 파일을 읽어 컨텍스트에 넣을 뿐이다.
@@ -35,7 +45,7 @@
 | **reserve** | LLM 출력의 다음 예약 필드 |
 | **origin** | 흐름이 어느 예약에서 열렸는가 |
 | **시스템 작업** | 사용자 접점이 없는 호출 — 플랜, 정리, 압축, 만료 검사 |
-| **블랙아웃** | LLM 트리거가 금지되는 시간대. 플랜과 만료 검사가 이 진입 시각에 돈다 |
+| **블랙아웃** | 시스템이 **먼저** 말을 거는 것이 금지되는 시간대. 활성 흐름에서 사용자 응답에 답하는 것은 허용. 플랜과 만료 검사가 이 진입 시각에 돈다 |
 | **INDEX** | `memory/*.md`의 `description` frontmatter에서 생성되는 목록. 매 턴 컨텍스트에 들어간다 |
 | **인바운드** | 사용자가 흐름 밖에서 보내는 메시지. 응답이 보장되지 않는다 |
 | **플랜** | 블랙아웃에 그리는 하루 계획. `plan_items` 테이블 |
@@ -43,7 +53,8 @@
 | **압축** | 현재 흐름 대화가 임계를 넘으면 오래된 부분을 요약으로 대체하는 것 |
 | **deferred** | 발화했으나 처리하지 못한 예약. `state='fired'` |
 | **`DATA_DIR`** | 설정·프롬프트·기억 파일·DB가 사는 디렉터리. 볼륨으로 마운트된다 |
-| **`TurnTx`** | 한 턴의 도구 쓰기 효과를 모으는 트랜잭션. 최종 JSON 성공 시 commit |
+| **`TurnTx`** | 한 턴의 모든 상태 변경(도구 효과·메시지 저장·reserve·흐름 닫기)을 모으는 트랜잭션. 최종 JSON 성공 시 commit(§9) |
+| **outbox** | `messages`의 `sent_at IS NULL`인 assistant 행. 커밋됐지만 아직 전송되지 않은 메시지 |
 | **`MemoryTx`** | 정리 호출의 기억 쓰기를 모으는 트랜잭션 |
 
 ---
@@ -105,9 +116,11 @@ DATA_DIR/
 
 `mode`는 `active/paused` 둘. "흐름 사이"는 `current_flow_id IS NULL`.
 
+**초기값**(§15.1): `mode='paused'`, `current_flow_id=NULL`, 모든 카운터(`random_due`, `failure_count`, `daily_calls`, `turn_generation`, `pending_system_event`) 0, `last_roll_at`·`last_plan_date`·`pause_reason`·`daily_calls_date` NULL.
+
 **`random_due`의 발생과 감소**
 - 발생: 단위 시간(`random.unit_sec`)마다 확률 `random.prob`로 1 증가, `random.max_due` 상한. 블랙아웃에도 증가. `last_roll_at`이 마지막 시행 시각.
-- 감소: **`reserve.consume_random = true`인 흐름의 첫 턴 성공 직후** 1 감소. 발화 시점이 아니다(부록 B). `consume_random`이 없거나 false면 감소하지 않는다.
+- 감소: 흐름의 **첫 턴**(`flows.turn_count`가 0→1이 되는 커밋)에서 `consume_random=true`면 **같은 `TurnTx` 안에서** 1 감소(하한 0). 발화 시점이 아니다(부록 B). 첫 턴에서 false거나 없으면 그 흐름은 이후 턴에서 true를 내도 감소하지 않는다.
 
 **`daily_calls`** — 로컬 자정 리셋. LLM API 요청 1건마다 1 증가(도구 라운드 포함).
 
@@ -128,7 +141,7 @@ DATA_DIR/
 | 이벤트 | 정지 | 흐름 없음 | 흐름 있음 |
 |---|---|---|---|
 | `debounce_expiry` | 버퍼 비움 | 대기 인바운드가 있고 인바운드 예약이 없으면 → 인바운드 예약 생성(`at=now`, 블랙아웃 밖으로 보정). 아니면 무시 | 버퍼가 비어 있지 않으면 → 턴 트리거. 비어 있으면 무시 |
-| `reservation_due(id)` | 무시(예약 보존) | 예약 소비, 새 흐름 개시 | **id == `current_flow.pending_self_reservation_id`** → 소비, 턴 트리거. **아니면** `state='fired'` 유지(deferred). 흐름 종료 시 처리 |
+| `reservation_due(id)` | 무시(예약 보존) | 예약 소비, 새 흐름 개시 | **id == `current_flow.pending_self_reservation_id`** → 소비, 턴 트리거(블랙아웃 중이면 §9 블랙아웃 규칙). **아니면** `state='fired'` 유지(deferred). 흐름 종료 시 처리 |
 | `system_event` | 무시 | 만료 검사 → 플랜 | **`pending_system_event=1` 설정 후 종료**(재큐 없음). 흐름 종료 시 처리 |
 | `cleanup_demotion(flow_id)` | 무시 | `cleanup_runner` 재실행 | 재큐하지 않음. `cleanup_status='pending'`이면 다음 흐름 종료 시 처리(방어) |
 
@@ -160,7 +173,7 @@ self-reserve 판정은 id 기반(부록 B).
 
 | 전이 | 조건 |
 |---|---|
-| 생성 | LLM `reserve`, `pool_create`(slot=deadline), 인바운드 도착(no-flow, slot=inbound). `state='scheduled'` |
+| 생성 | LLM `reserve`(slot=흐름의 `origin_slot`), `pool_create`(slot=deadline), 인바운드 도착(no-flow, slot=inbound), 실패 백오프(self 예약). `state='scheduled'` |
 | 발화 | 타이머 → `state='fired'`, `reservation_due(id)` 큐 투입 |
 | 소비 | 흐름 개시 또는 self-reserve 턴. 행 삭제 |
 | 보류 | 발화했으나 처리 못 함. `state='fired'` 유지(deferred) |
@@ -171,14 +184,22 @@ self-reserve 판정은 id 기반(부록 B).
 
 | 원천 | `at` 규칙 |
 |---|---|
-| LLM `reserve` | `clamp(now+min_lead, now+max_lead)`, 블랙아웃이면 그 끝으로 |
+| LLM `reserve`(`flow=end`, 다음 흐름 개시) | `clamp(now+min_lead, now+max_lead)`, 블랙아웃이면 그 끝으로 |
+| LLM `reserve`(`flow=continue`, self) · 실패 백오프 | `clamp(now+min_lead, now+max_lead)`. **블랙아웃 보정 안 함**(§9 블랙아웃 규칙) |
 | `pool_create` | `deadline` 그대로. 과거면 `now+min_lead`, `now+pool_ttl` 초과면 거부. 블랙아웃이면 그 끝으로 |
-| 인바운드 도착 | `now`. 블랙아웃 밖으로 보정 |
+| 인바운드 도착 | `now`. 블랙아웃 밖으로 보정(블랙아웃 중 도착이면 그 끝) |
 
 **생성 시 prompt 결정**
-- LLM `reserve`: `reserve.prompt`.
+- LLM `reserve`: `reserve.prompt`. 무효(`prompts/jobs/` 밖, 파일 없음·읽기 불가)면:
+  - `flow=continue`: 흐름의 마지막 성공 프롬프트(`flows.prompt`)로 대체, 로그. 불변식 (d)를 지킨다.
+  - `flow=end`: 그 예약만 폐기, 로그.
+- 실패 백오프: 실패한 턴이 사용한 프롬프트.
 - `pool_create`: 그 도구 호출의 `prompt` 인자(§7.2).
 - 인바운드 도착: config의 `inbound_prompt`.
+
+**slot·payload 상속**
+- LLM `reserve`의 slot은 흐름의 `origin_slot`. `slot='deadline'`이면 `payload.pool_id`를 origin 예약에서 상속한다(`flows.origin_pool_id`).
+- 상속할 `pool_id`의 항목이 `pending`/`due`가 아니면(같은 턴의 `pool_judge(judged)` 포함, `TurnTx` 반영 후 상태 기준) **그 reserve는 폐기**한다. `main`으로 강등하지 않는다. `continue`에서 폐기되면 흐름 prompt 대체와 같은 이유로 (d)가 깨지므로, 이 경우 흐름을 `end`로 취급해 닫는다(`end_reason='orphaned_pool'`).
 
 ### 5.2 흐름 (`flows`)
 
@@ -187,21 +208,23 @@ self-reserve 판정은 id 기반(부록 B).
 | `id` | INTEGER PK | |
 | `origin_slot` | TEXT | 이 흐름의 `reserve`가 만드는 행의 slot |
 | `origin_reservation_id` | INTEGER | 삭제된 행을 가리켜도 무해. 기록용 |
+| `origin_pool_id` | INTEGER / NULL | `origin_slot='deadline'`이면 origin 예약의 `payload.pool_id`. reserve 상속용 |
 | `pending_self_reservation_id` | INTEGER / NULL | 이 흐름의 다음 턴 예약 id |
-| `prompt` | TEXT | 이 흐름이 사용한 프롬프트 파일 경로 |
+| `prompt` | TEXT | 마지막 성공 턴의 프롬프트 파일 경로. 개시 시 origin 예약의 prompt |
+| `turn_count` | INTEGER | 커밋된 턴 수. 0에서 시작, 턴 커밋마다 1 증가 |
 | `started_at` | TEXT | |
 | `ended_at` | TEXT / NULL | |
-| `end_reason` | TEXT / NULL | agent / paused / cancelled |
+| `end_reason` | TEXT / NULL | agent / paused / cancelled / blackout / orphaned_pool |
 | `cleanup_status` | TEXT | pending / done / failed / skipped |
 | `summary` | TEXT / NULL | 압축된 대화 요약 |
 | `compacted_until_id` | INTEGER / NULL | 압축이 커버한 마지막 message id |
 
 | 전이 | 조건 |
 |---|---|
-| 열림 | 예약 소비 → `current_flow_id` 설정, origin·prompt 기록 |
-| 턴 | self-reserve 또는 디바운스. `pending_self_reservation_id` 갱신 |
+| 열림 | 예약 소비 → `current_flow_id` 설정, origin·prompt 기록, `turn_count=0` |
+| 턴 | self-reserve 또는 디바운스. 커밋 시 `turn_count++`, `prompt`를 이 턴의 프롬프트로, `pending_self_reservation_id` 갱신 |
 | 압축 | 응답 전송 뒤 문자 임계 초과 시 `summary`·`compacted_until_id` 갱신 |
-| 닫힘 | LLM `flow=end`, 또는 `/pause`, `/cancel` → `ended_at`, `end_reason`, `cleanup_status=pending` → 정리 동기 실행 |
+| 닫힘 | LLM `flow=end`, `/pause`, `/cancel`, 블랙아웃 규칙(§9), 상속 pool 판정됨(§5.1) → `ended_at`, `end_reason`, `cleanup_status=pending` → 정리 동기 실행 |
 | 정리 완료 | `cleanup_status=done` |
 
 ### 5.3 비동기 풀 (`pool_items`)
@@ -220,11 +243,11 @@ self-reserve 판정은 id 기반(부록 B).
 | 전이 | 조건 |
 |---|---|
 | `pending` | `pool_create` |
-| `due` | deadline 예약 발화. `due_at=now` |
+| `due` | deadline 예약 발화. `due_at`이 NULL일 때만 `now`(처음 due가 된 시각 유지) |
 | `judged` | `pool_judge(judged)`, `expired`, `reissued`, `cancelled` |
-| `due_keep` | `pool_judge(due_keep)` → `due` 유지 |
+| `due_keep` | `pool_judge(due_keep)` → `due` 유지. 예약은 건드리지 않음 |
 
-**판정 시 해당 `pool_id`의 deadline 예약(`scheduled`·`fired`)을 삭제한다**(부록 B).
+**`judged`로 닫힐 때만**(`close_reason` 무관) 해당 `pool_id`의 deadline 예약(`scheduled`·`fired`)을 삭제한다(부록 B). `due_keep`은 삭제하지 않는다. 재검사는 흐름의 `reserve`가 만드는 새 deadline 예약(§5.1 상속)으로 한다. `due_keep` 후 reserve가 없으면 항목은 `due`로 남아 이벤트 블록에 노출되다가 `pool_ttl` 만료로 닫힌다.
 
 ### 5.4 인바운드 (`inbound_messages`)
 
@@ -232,7 +255,7 @@ self-reserve 판정은 id 기반(부록 B).
 
 | 전이 | 조건 |
 |---|---|
-| `pending` | 수신(흐름 없음, 블랙아웃 아님) |
+| `pending` | 수신(흐름 없음). 블랙아웃 중에도 저장(§10) |
 | `consumed` | 인바운드 흐름 개시 시 전부 소비 표시. `consumed_flow_id` 기록 |
 | `expired` | 만료 검사(시간 초과 또는 N건 초과 시 오래된 것부터) |
 
@@ -248,7 +271,9 @@ self-reserve 판정은 id 기반(부록 B).
 
 ### 5.6 메시지 (`messages`)
 
-`id`, `flow_id`, `role`(user/assistant), `content`, `ts`, `ignored`(0/1), `ignored_reason`(ended/paused/blackout/late).
+`id`, `flow_id`, `role`(user/assistant), `content`, `ts`, `ignored`(0/1), `ignored_reason`(ended/paused/late/undelivered), `sent_at`(assistant만, NULL=미전송), `tg_message_id`(assistant만, 전송 성공 시).
+
+**outbox**: assistant 메시지는 `TurnTx` 안에서 `sent_at=NULL`로 저장되고, 커밋 뒤 전송이 성공할 때마다 하나씩 `sent_at`·`tg_message_id`를 채운다. 재시작 시 `sent_at IS NULL`인 assistant 행을 `id` 순으로 재전송한다(§15.2). 텔레그램 ack와 마킹 사이 크래시만 중복을 낳는다.
 
 **이벤트 블록은 `messages`에 저장하지 않는다.** 컨텍스트 조립 시 마지막 user 메시지에 합쳐지고, 저장되지 않는다. 그래서 `role='event'`는 쓰지 않는다(부록 B).
 
@@ -268,7 +293,7 @@ self-reserve 판정은 id 기반(부록 B).
 | 2 | system | call-rules | `prompts/call-rules.md` (필수, 플레이스홀더 치환) |
 | 3 | system | state | `memory/state.md` (있으면 매 호출) |
 | 4 | system | INDEX | `memory/*.md` frontmatter에서 생성 |
-| 5 | system | job prompt | 예약 행의 `prompt`가 가리키는 파일 |
+| 5 | system | job prompt | self 예약 트리거면 그 예약의 `prompt`, 디바운스 트리거면 `flows.prompt`가 가리키는 파일 |
 | 6 | user/assistant | 현재 흐름 대화 | `messages WHERE flow_id=? AND ignored=0 AND (compacted_until_id IS NULL OR id > compacted_until_id)`. `flows.summary`가 있으면 앞에 요약 블록. assistant는 JSON 원문 |
 | 7 | user | 이벤트 블록 | 하네스 |
 
@@ -289,6 +314,8 @@ self-reserve 판정은 id 기반(부록 B).
 | `prompts/jobs/*.md` | 최소 1개 | 예약 행의 `prompt` | 그 예약 폐기, 로그 |
 | `memory/state.md` | 선택 | 매 턴 | 건너뜀 |
 | `memory/*.md` | 선택 | INDEX만, 본문은 `memory_read` | INDEX 생략 |
+
+플랜 `reserve`가 null이면 하네스는 다음 블랙아웃까지 먼저 말을 걸지 않는다. 특히 첫 플랜(§15.1)은 `plan-rules.md`가 reserve를 내도록 규정해야 한다.
 
 **하네스가 주입하는 플레이스홀더** — `call-rules.md`와 `plan-rules.md` 등에서 쓴다.
 
@@ -331,11 +358,11 @@ plan:
 
 | 호출 | 블록 |
 |---|---|
-| 플랜 | `plan-rules.md` + INDEX + 이벤트 블록(블랙아웃 진입, 오늘 날짜, 어제 미완 요약) |
+| 플랜 | `plan-rules.md` + `state.md` + 이벤트 블록(블랙아웃 진입, 오늘 날짜, 어제 미완 요약) |
 | 정리 | `cleanup-rules.md` + INDEX + `state.md` + (`flows.summary` + `id > compacted_until_id`인 메시지) |
-| 압축 | `compact-rules.md` + 압축 대상 구간 |
+| 압축 | `compact-rules.md` + 기존 `summary` + 압축 대상 구간 |
 
-persona·call-rules·state는 정리·압축에 넣지 않는다.
+persona·call-rules는 시스템 작업에 넣지 않는다. 플랜·압축은 도구가 없으므로 INDEX를 넣지 않는다(열 수 없는 목록은 낭비다). 플랜에 필요한 상시 정보는 `state.md`에 있어야 한다.
 
 ### 6.4 INDEX 생성
 
@@ -360,8 +387,8 @@ persona·call-rules·state는 정리·압축에 넣지 않는다.
 
 - `messages`: 0개 이상.
 - `flow=continue`면 `reserve` 필수. `flow=end`면 선택.
-- `reserve.prompt`는 `prompts/jobs/` 아래 파일 경로. 없거나 읽을 수 없으면 그 예약만 폐기.
-- `consume_random`: 선택, 기본 false. true면 이 흐름의 첫 턴 성공 직후 `random_due` 1 감소.
+- `reserve.prompt`는 `prompts/jobs/` 아래 파일 경로. 무효면 `continue`는 `flows.prompt`로 대체, `end`는 그 예약만 폐기(§5.1).
+- `consume_random`: 선택, 기본 false. 흐름의 첫 턴(`turn_count` 0→1)에서만 의미가 있고, true면 같은 커밋에서 `random_due` 1 감소(§3).
 
 플랜:
 
@@ -378,7 +405,7 @@ persona·call-rules·state는 정리·압축에 넣지 않는다.
 
 | 도구 | 인자 | 노출 |
 |---|---|---|
-| `memory_read` | `name: string` | 턴, 플랜, 정리, 압축 |
+| `memory_read` | `name: string` | 턴, 정리 |
 | `memory_write` | `name: string`, `content: string` | 정리 |
 | `memory_create` | `name: string`, `description: string`, `content: string` | 정리 |
 | `pool_judge` | `id: integer`, `verdict: "judged" \| "due_keep"` | 턴 |
@@ -386,10 +413,10 @@ persona·call-rules·state는 정리·압축에 넣지 않는다.
 | `plan_done` | `id: integer` | 턴 |
 | `plan_add` | `text: string`, `hint?: string` | 턴 |
 
-플랜 호출은 도구를 쓰지 않는다—출력의 `items`가 곧 플랜이다. 도구 목록은 호출 종류별로 분리 제공. 목록에 없는 도구를 지어내 호출하면 거부 결과를 돌려준다.
+플랜·압축 호출은 도구를 쓰지 않는다(`tools` 미제공)—플랜은 출력의 `items`가, 압축은 `summary`가 곧 결과다. 도구 목록은 턴·정리 호출별로 분리 제공. 목록에 없는 도구를 지어내 호출하면 거부 결과를 돌려준다.
 
 **도구 검증**
-- `pool_judge`: 없는 id·이미 `judged`면 거부 결과. `pending`/`due`면 판정 + deadline 예약 삭제.
+- `pool_judge`: 없는 id·이미 `judged`면 거부 결과. `pending`/`due`면 판정. `judged`일 때만 deadline 예약 삭제.
 - `pool_create`: `prompt`가 `prompts/jobs/` 하위가 아니거나 파일이 없으면 거부. `replaces=N`이 없거나 이미 `judged`면 거부. `pending`/`due`면 `reissued`.
 - `plan_done(id)`: 없는 id면 거부.
 - `plan_add`: `plan_date` 항목 수가 `plan_max_items` 초과면 거부.
@@ -403,15 +430,15 @@ persona·call-rules·state는 정리·압축에 넣지 않는다.
 |---|---|
 | JSON 파싱 실패 / 스키마 검증 실패 | 1회 재시도 |
 | `reserve` 누락(continue) / `at` 형식 오류 | 파싱 실패와 동일 |
-| `reserve.prompt` 파일 없음/불가 | 그 예약만 폐기, 흐름 유지, 로그 |
+| `reserve.prompt` 파일 없음/불가 | `continue`: `flows.prompt`로 대체. `end`: 그 예약만 폐기. 로그 |
 | `at` 과거/범위 밖 | 클램프(§5.1) |
-| 재시도도 실패 | 응답 통째 폐기. `failure_count++`, 백오프 예약, `flow` 유지. `alert_after` 도달 시 운영자 알림 |
+| 재시도도 실패 | 응답 통째 폐기. `failure_count++`, 백오프 예약을 **self 예약으로 등록**(`pending_self_reservation_id`, prompt=실패한 턴의 프롬프트), `flow` 유지. `alert_after` 도달 시 운영자 알림 |
 
 실패한 응답은 `messages`도 전송하지 않는다.
 
 ### 7.4 도구 라운드와 강제 JSON
 
-- 도구 호출·결과 전달을 최대 `max_tool_rounds`(정리·플랜·압축은 별도 상한)회 반복 후 최종 JSON.
+- 도구 호출·결과 전달을 최대 `max_tool_rounds`(정리는 `max_cleanup_tool_rounds`)회 반복 후 최종 JSON. 플랜·압축은 도구 라운드 없음.
 - 상한 초과 시 `tools` 유지 + `tool_choice: "none"`으로 한 번 더 호출.
 - 도구 쓰기 효과는 `TurnTx`/`MemoryTx`에 모았다가 최종 JSON 성공 시 일괄 commit.
 
@@ -423,9 +450,18 @@ persona·call-rules·state는 정리·압축에 넣지 않는다.
 
 **system_timer**: `now` 이후 첫 블랙아웃 진입 시각 조준. 발화 시 `system_event` 큐 투입. `last_plan_date`가 오늘이면 다음 날로 건너뛴다.
 
-**불변식**: `mode=active`이면 `reservations`에 `state='scheduled'` 행이 최소 1개이거나 `system_timer`가 살아 있다. `fired`는 불변식에 포함되지 않는다.
+**불변식**
 
-**블랙아웃 보정**: 예약 `at`이 블랙아웃이면 그 끝으로 민다. 발화 시점에 다시 확인. 설정에서 블랙아웃이 비면 시작 검증에서 실패시킨다.
+| # | 내용 |
+|---|---|
+| (a) | `mode=active`면 `system_timer`는 항상 다음 블랙아웃 진입을 조준한다 |
+| (b) | `state='scheduled'` 행이 있으면 `flow_timer`는 `MIN(at)`을 조준한다 |
+| (c) | 활성 흐름은 최대 1개(`current_flow_id` 단일 값) |
+| (d) | 열린 흐름은 턴 실행 중이 아니면 항상 `pending_self_reservation_id`(`scheduled` 행)를 가진다 |
+
+"deadlock 없음"은 (a)+(d)에서 파생된다. 흐름이 없으면 (a)가 늦어도 다음 블랙아웃에 시스템을 깨우고, 흐름이 있으면 (d)의 self 예약이 언젠가 발화해 턴을 돌리거나 흐름을 닫는다(§9 블랙아웃 규칙). (d)를 지키는 장치: continue의 무효 prompt 대체(§5.1), 실패 백오프의 self 등록(§7.3), 상속 pool 판정 시 흐름 닫기(§5.1). `fired`(deferred)는 불변식에 포함되지 않는다.
+
+**블랙아웃 보정**: self 예약을 제외한 예약 `at`이 블랙아웃이면 그 끝으로 민다. 발화 시점에 다시 확인(self가 아닌 예약이 블랙아웃 중 발화하면 다시 끝으로 민다). self 예약의 블랙아웃 발화는 §9 블랙아웃 규칙을 따른다. 설정에서 블랙아웃이 비면 시작 검증에서 실패시킨다.
 
 **DST·자정 넘김**: "그날 첫 진입"은 로컬 날짜 변경으로 판정(luxon `toISODate()`). 블랙아웃이 자정을 넘어도 진입은 하루 한 번.
 
@@ -450,9 +486,17 @@ loop:
 
 **handle_reservation(id)**
 - 행 조회. 없으면 폐기.
-- 흐름 없음: 소비 → `open_flow(id)` → `run_turn(self)`.
-- 흐름 있음 & id == pending_self: 소비 → `run_turn(self)`.
+- 흐름 없음: 소비 → `open_flow(id)`(`slot='deadline'`이면 풀 항목 `due` 전이, `origin_pool_id` 기록) → `run_turn(self)`.
+- 흐름 있음 & id == pending_self: 소비 → 블랙아웃 중이면 아래 블랙아웃 규칙, 아니면 `run_turn(self)`.
 - 흐름 있음 & 그 외: `state='fired'` 유지(deferred).
+
+**블랙아웃 규칙 (self 예약)**
+
+self 예약은 생성 시 블랙아웃 보정을 받지 않는다(§5.1). 블랙아웃 중 발화하면:
+- 그 흐름에 **마지막 assistant 메시지 뒤 유효 user 메시지가 있으면**(응답 대기 중—실패 백오프 재시도 등) → `run_turn(self)`. 사용자에게 답하는 것이므로 허용.
+- 없으면 → 시스템이 먼저 말을 거는 셈이므로 턴을 돌리지 않고 흐름을 닫는다(`end_reason='blackout'`). 정리 실행 후 공통 마무리(deferred → `pending_system_event` → 플랜).
+
+즉 블랙아웃 중 self 예약은 "그때까지 사용자가 답이 없으면 흐름을 접는다"는 의미가 된다. 사용자가 계속 대화하는 동안은 디바운스 턴으로 흐름이 이어지고, 대화가 끊기면 늦어도 self 예약 시각에 흐름이 닫혀 플랜이 돈다.
 
 **handle_system**
 - 흐름 있음: `pending_system_event=1`, 종료.
@@ -462,16 +506,21 @@ loop:
 
 **run_turn(trigger)**
 1. `balance_guard`(§9.1). 초과 시 `pause_reason` 설정, 이벤트 재큐, 종료.
-2. (디바운스 트리거면) pending self 예약 삭제, `pending_self_reservation_id` NULL.
+2. (디바운스 트리거면) pending self 예약 삭제, `pending_self_reservation_id` NULL. 턴 실행 중이므로 (d) 예외 구간.
 3. 컨텍스트 조립 → `turn_executor` → 파싱. **`turn_generation`을 시작 시 읽고 파싱 직후 비교.** 다르면 `TurnTx` rollback, 폐기, 로그(부록 B).
-4. `result_applier`:
-   a. `TurnTx` commit.
-   b. `messages` 전송(취소·억제 플래그 없으면).
-   c. `reserve` 반영. `continue`면 self 예약 + pending 갱신. `end`면 다음 흐름 개시 예약만 생성, pending NULL.
-   d. `flow=end`면 흐름 닫고 `cleanup_runner` 동기 호출. 실패 시 `cleanup_demotion` 큐 강등.
-5. `consume_random=true`면 `random_due` 1 감소.
-6. 압축 검사(§13.2). 응답 전송 뒤.
-7. 실패: 폐기, `failure_count++`, 백오프, 흐름 유지.
+4. `TurnTx` commit — 아래가 **한 트랜잭션**이다.
+   - 도구 쓰기 효과(풀·플랜).
+   - assistant 메시지 저장(`sent_at=NULL`, outbox).
+   - `turn_count++`, `flows.prompt` 갱신, `failure_count=0`.
+   - 첫 턴(`turn_count` 0→1)이고 `consume_random=true`면 `random_due` 1 감소.
+   - `reserve` 반영(§5.1 prompt 대체·상속·폐기 규칙 적용). `continue`면 self 예약 생성 + pending 갱신. `end`면 pending self 행 삭제, 다음 흐름 개시 예약만 생성, pending NULL.
+   - `flow=end`(또는 상속 pool 판정으로 강제 종료)면 흐름 닫기: `ended_at`, `end_reason`, `cleanup_status=pending`, `current_flow_id=NULL`.
+5. 커밋 뒤 outbox 전송(취소 플래그 없으면). 성공한 메시지마다 `sent_at`·`tg_message_id` 기록.
+6. 흐름이 닫혔으면 `cleanup_runner` 동기 호출. 실패 시 `cleanup_demotion` 큐 강등. 그다음 공통 마무리.
+7. 흐름이 열려 있으면 압축 검사(§13.2).
+8. 실패(재시도까지): 폐기, `failure_count++`, 백오프 self 예약 등록(§7.3), 흐름 유지.
+
+커밋 후 전송 전 크래시는 메시지가 outbox에 남아 재시작 시 재전송된다(§15.2). 상태와 대화 기록은 이미 진행돼 있으므로 다음 턴의 컨텍스트는 실제와 어긋나지 않는다.
 
 **흐름 종료 후 공통 마무리 (deferred + system_event)**
 
@@ -496,21 +545,23 @@ loop:
 | `/resume` | `mode=active`, `pause_reason=NULL`. **deferred 먼저**, 그다음 `MIN(scheduled)` 재조정. `last_plan_date` 미완이면 `system_event`(블랙아웃 중이면 끝으로) | 무시 | 무시 |
 | `/cancel` | 무시 | 무시 | `turn_generation++`, 흐름 닫기(`cancelled`), 정리 skip(`skipped`), 버퍼 `late`, pending self 삭제, **deferred 처리**, 그다음 `MIN(scheduled)` 교체, 최근 봇 메시지 삭제 시도 |
 
-**403(차단)**: `messages` 전송 중 403이면 남은 전송 중단, `/pause`와 동일 처리. 이미 보낸 것은 유지.
+**403(차단)**: `messages` 전송 중 403이면 남은 전송 중단, `/pause`와 동일 처리. 이미 보낸 것은 유지, 남은 것은 `sent_at=NULL` + `ignored=1, ignored_reason='undelivered'`로 표시한다. 재개 후 재전송하지 않고, 컨텍스트에서도 빠져 LLM이 사용자가 보지 못한 말을 본 것으로 착각하지 않는다.
+
+**`/cancel`의 봇 메시지 삭제**: 그 흐름의 `tg_message_id`가 있는 마지막 assistant 메시지들을 대상으로 한다.
 
 ---
 
 ## 10. 인바운드 처리
 
-**수신(흐름 없음, 블랙아웃 아님)**: `inbound_messages`에 `pending` 저장 + 디바운스 타이머 (재)설정.
+**수신(흐름 없음)**: 블랙아웃 여부와 무관하게 `inbound_messages`에 `pending` 저장 + 디바운스 타이머 (재)설정.
 
-**수신(블랙아웃 중)**: `messages`에 `ignored=1, ignored_reason='blackout'` 저장. 인바운드로 만들지 않고 버퍼에도 넣지 않는다(§16).
+**수신(흐름 있음)**: 블랙아웃 여부와 무관하게 `messages`에 저장하고 디바운스 버퍼에 넣는다. 블랙아웃은 시스템이 먼저 말을 거는 것만 막으므로, 활성 흐름의 응답은 정상 처리한다.
 
-**디바운스 만료(흐름 없음)**: `pending` 인바운드가 있고 인바운드 예약이 없으면 예약 생성(`at=now`, 블랙아웃 보정, **`prompt`는 config의 `inbound_prompt`**). 발화 시 그 시점의 모든 `pending`을 `consumed`로 표시(`consumed_flow_id`)하고 컨텍스트에 넣는다. 다루지 않은 것도 소비된 채로 남는다.
+**디바운스 만료(흐름 없음)**: `pending` 인바운드가 있고 인바운드 예약이 없으면 예약 생성(`at=now`, 블랙아웃 보정—블랙아웃 중이면 그 끝, **`prompt`는 config의 `inbound_prompt`**). 블랙아웃에 받은 메시지는 아침에 인바운드 흐름으로 처리된다. 발화 시 그 시점의 모든 `pending`을 `consumed`로 표시(`consumed_flow_id`)하고 컨텍스트에 넣는다. 다루지 않은 것도 소비된 채로 남는다.
 
 **흐름 종료 시**: 대기 인바운드가 남아 있고 인바운드 예약이 없으면 새 예약 생성.
 
-**만료(블랙아웃 진입 시)**: `received_at`이 `inbound_ttl` 초과이거나 `pending`이 `inbound_max` 초과면 오래된 것부터 `expired`. `expired`는 컨텍스트에 편입되지 않는다.
+**만료(블랙아웃 진입 시)**: `received_at`이 `inbound_ttl` 초과이거나 `pending`이 `inbound_max` 초과면 오래된 것부터 `expired`. `expired`는 컨텍스트에 편입되지 않는다. 블랙아웃 중 도착한 메시지는 진입 뒤에 왔으므로 그날 만료 검사의 대상이 아니다(상한 초과분은 수신 시 오래된 것부터 `expired`).
 
 ---
 
@@ -518,9 +569,9 @@ loop:
 
 **생성**: `pool_create(task, deadline, prompt)` → `pool_items` `pending`(prompt 포함) + `reservations`(`slot=deadline, prompt=그 값, payload={pool_id}`).
 
-**마감 발화**: deadline 예약 소비 → 풀 `due` → 마감 흐름 개시(예약의 `prompt`). 흐름 종료 시 `reserve`가 있으면 새 deadline 예약.
+**마감 발화**: deadline 예약 소비 → 풀 `due`(`due_at`은 처음 한 번만) → 마감 흐름 개시(예약의 `prompt`, `origin_pool_id` 기록). 이 흐름의 `reserve`는 `slot=deadline`, `payload.pool_id=origin_pool_id`로 만들어진다(§5.1).
 
-**판정**: `pool_judge(judged)` → `judged`+사유. `due_keep` → `due` 유지. 판정 시 deadline 예약 삭제.
+**판정**: `pool_judge(judged)` → `judged`+사유, 해당 deadline 예약 삭제. `due_keep` → `due` 유지, 예약 유지. 재검사가 필요하면 흐름이 `reserve`를 낸다. 같은 턴에서 `judged` 후 `reserve`를 내면 그 reserve는 폐기된다(유령 흐름 방지, §5.1).
 
 **재발행**: `pool_create(replaces=원본)` → 원본 `reissued`, 원본 deadline 예약 삭제, 신규 `pending`.
 
@@ -534,7 +585,7 @@ loop:
 
 **발화**: `system_timer` → 블랙아웃 진입 → `handle_system` → (deferred·system_event 마무리 뒤) 만료 검사 → `plan_runner`.
 
-**입력**: `plan-rules.md`, INDEX, 이벤트 블록(날짜, 어제 미완 요약).
+**입력**: `plan-rules.md`, `state.md`, 이벤트 블록(날짜, 어제 미완 요약).
 
 **출력**: `{"items": [...], "reserve": {...}|null}`. 도구 없음.
 
@@ -587,37 +638,47 @@ loop:
 
 - `memory_write`는 파일 전체 교체. `memory_file_max_chars` 초과면 거부.
 - `memory_create`는 새 파일 + `description`. `memory_max_files` 초과면 거부.
-- 정리 호출만 쓰기 가능. 턴·플랜·압축은 읽기만.
+- 정리 호출만 쓰기 가능. 턴은 `memory_read`로 읽기만. 플랜·압축은 도구가 없다.
 - 섹션 구조와 의미는 전적으로 `cleanup-rules.md`(운영자 소유)가 규정한다.
 
 **경로 검증**: `memory_read(name)`과 `memory_write/create(name)`은 `memory/` 하위로 정규화하고, `..` 등으로 벗어나면 거부한다. `reserve.prompt`와 `pool_create(prompt)`도 `prompts/jobs/` 하위로 검증한다.
 
 ---
 
-## 15. 재시작 복구
+## 15. 첫 실행과 재시작 복구
+
+### 15.1 첫 실행
+
+1. `config` 로드·zod 검증(블랙아웃 빈 값, 필수 프롬프트 파일 존재). 실패면 시작 실패.
+2. DB 마이그레이션. `harness_state` 행이 없으면 §3 초기값으로 생성(`mode='paused'`).
+3. 타이머는 켜지 않는다. paused 상태의 메시지에는 "`/resume`으로 시작" 안내만 보낸다(테스트 1).
+4. 첫 `/resume`: `last_plan_date`가 NULL이므로 `system_event`를 즉시 넣는다(블랙아웃 중이면 끝 시각). 첫 플랜이 `reserve`를 내야 첫날 대화가 시작된다(§6.2).
+
+### 15.2 재시작 복구
 
 1. `harness_state` 읽기. `paused`면 타이머만 끄고 종료.
-2. `cleanup_status=pending`인 닫힌 흐름 → `cleanup_demotion` 큐(백오프 0).
-3. 열린 흐름이 있으면: 마지막 assistant 응답 뒤 유효 user 메시지로 디바운스 버퍼 복원. 블랙아웃 아니면 만료 즉시, 블랙아웃이면 끝 시각.
-4. `scheduled` 예약: `at` 과거면 즉시 발화(블랙아웃이면 밀기), 미래면 타이머 재조정.
-5. `pause_reason` 있으면 재확인 타이머.
-6. `fired`(deferred)가 있고 흐름이 복원되지 않았으면 deferred 처리.
-7. `pending_system_event=1`이고 흐름 없으면 만료 검사 → 플랜.
-8. `last_plan_date` 미완이면 `pending_system_event=1` 설정(블랙아웃 중이면 끝에 처리).
+2. outbox 재전송: `sent_at IS NULL`이고 `ignored=0`인 assistant 메시지를 `id` 순으로 전송.
+3. `cleanup_status=pending`인 닫힌 흐름 → `cleanup_demotion` 큐(백오프 0).
+4. 열린 흐름이 있으면: 마지막 assistant 응답 뒤 유효 user 메시지로 디바운스 버퍼 복원, 만료 즉시(블랙아웃 무관—사용자 응답이므로).
+5. `scheduled` 예약: `at` 과거면 즉시 발화(self가 아닌 것은 블랙아웃이면 밀기, self는 §9 블랙아웃 규칙), 미래면 타이머 재조정.
+6. `pause_reason` 있으면 재확인 타이머.
+7. `fired`(deferred)가 있고 흐름이 복원되지 않았으면 deferred 처리.
+8. `pending_system_event=1`이고 흐름 없으면 만료 검사 → 플랜.
+9. `last_plan_date` 미완이면 `pending_system_event=1` 설정(블랙아웃 중이면 끝에 처리).
 
-진행 중 LLM 호출은 사라진다. 그 턴의 `messages`는 커밋 안 됐으므로 사용자는 못 받았고, 다음 턴에 재시도된다.
+진행 중 LLM 호출은 사라진다. 그 턴은 커밋되지 않았으므로 상태·메시지 모두 반영되지 않았고, 열린 흐름이면 4·5단계로 재시도된다. 커밋 뒤 전송 전에 죽었으면 2단계가 메시지를 보낸다.
 
 ---
 
 ## 16. 텔레그램 운영
 
 - **chat_id 제한**: 설정 외 메시지는 로그 없이 버림.
-- **블랙아웃 검사**: 수신 즉시 확인. 블랙아웃 중이면 `ignored_reason='blackout'` 저장, 버퍼·인바운드로 보내지 않음.
+- **블랙아웃**: 수신을 막지 않는다. 흐름 있으면 버퍼, 없으면 `pending` 인바운드(§10).
 - **평문 전송**: `parse_mode` 미사용.
 - **길이**: 4096자 초과는 줄바꿈 경계 분할.
 - **다중 messages**: `send_interval` 간격. 429는 `retry_after` 대기 후 재전송.
-- **403**: 남은 전송 중단, `/pause` 처리.
-- **그 외 오류**: 몇 회 재시도 후 로그만, 스케줄 적용은 진행.
+- **403**: 남은 전송 중단, 남은 메시지는 `ignored=1, ignored_reason='undelivered'`, `/pause` 처리.
+- **그 외 오류**: 몇 회 재시도 후 그 메시지는 `ignored_reason='undelivered'`, 로그. 상태는 이미 커밋됐으므로 그대로 진행.
 - **운영 명령**: `/pause`, `/resume`, `/cancel`은 즉시 처리(큐 미경유). §9.2.
 
 ---
@@ -676,7 +737,7 @@ loop:
 | 키 | 기본 | 의미 |
 |---|---|---|
 | `timezone` | `Asia/Seoul` | IANA |
-| `blackout` | `00:00-08:00` | 불가 시간대. 자정 넘김 허용. 빈 값 금지 |
+| `blackout` | `00:00-08:00` | 시스템이 먼저 말을 걸지 않는 시간대. 자정 넘김 허용. 빈 값 금지 |
 | `inbound_prompt` | `prompts/jobs/inbound.md` | 인바운드 예약의 prompt |
 | `message_debounce_sec` | 20 | |
 | `reservation_lead_min_sec` | 60 | |
@@ -692,8 +753,6 @@ loop:
 | `failure_alert_after` | 3 | |
 | `max_tool_rounds` | 3 | 턴 |
 | `max_cleanup_tool_rounds` | 5 | 정리 |
-| `max_plan_tool_rounds` | 2 | 플랜 |
-| `max_compact_tool_rounds` | 1 | 압축 |
 | `provider` | — | `openai` / `deepseek` |
 | `model`, `api_key` | — | |
 | `bot_token`, `owner_chat_id` | — | |
@@ -722,7 +781,8 @@ loop:
 | `state.md` 상시 컨텍스트 | 매 턴 필요한 최소 상태를 INDEX 열람 없이 제공한다 |
 | `mode`에서 `ended` 제거 | "ended"는 "흐름 없음"과 중복이다 |
 | `reservations.state`(scheduled/fired) | 발화했으나 처리 못 한 예약을 타이머가 재발화하지 않게 한다. `fired`가 곧 deferred |
-| `consume_random`을 LLM이 결정 | `random` 슬롯을 없앴으므로 "어느 흐름이 랜덤을 소비하는가"를 slot이 아니라 LLM의 명시적 플래그로 정한다. 첫 턴 성공 후 감소하므로 백오프 재시도로 이중 감소하지 않는다 |
+| `consume_random`을 LLM이 결정 | `random` 슬롯을 없앴으므로 "어느 흐름이 랜덤을 소비하는가"를 slot이 아니라 LLM의 명시적 플래그로 정한다 |
+| `turn_count` 0→1 커밋에서 감소 | 실패·취소된 턴은 커밋되지 않으므로 0→1 전이는 흐름당 정확히 한 번이다. 같은 트랜잭션이라 이중 감소도 누락도 없다 |
 | `pool_items.prompt` | 마감 흐름이 어떤 job 파일을 쓸지는 `pool_create` 시점에 정해져야 한다. 예약 발화 시점에는 풀 항목만 있고 프롬프트가 없으면 흐름을 열 수 없다 |
 | `inbound_prompt` config | 인바운드 예약은 하네스가 만들므로 프롬프트 출처가 필요하다. job 파일로 두되 config로 경로를 지정한다 |
 | `messages`에 `role='event'` 없음 | 이벤트 블록은 저장하지 않는다. 저장하면 다음 턴에 두 번 들어간다 |
@@ -734,8 +794,14 @@ loop:
 | `compacted_until_id`(id 기준) | `ts`는 동시각 충돌이 난다 |
 | 정리 입력을 "압축 + 남은 구간"으로 | 원본을 다 주면 압축의 비용 절감이 사라진다 |
 | `pool` 요약 5개 상한 | 20개가 이벤트 블록에 들어가면 컨텍스트를 낭비한다 |
-| `blackout`을 수신 시점에 기록 | 버퍼에 넣었다가 나중에 거르면 추적이 어렵다 |
-| `pool_judge` 시 deadline 예약 삭제 | 판정됐는데 마감이 발화하면 유령 흐름이 열린다 |
+| 블랙아웃은 "먼저 말 걸기"만 금지 | 활성 흐름의 응답을 버리면 대화가 끊기고, 흐름 없는 메시지를 버리면 "지속" 에이전트가 사용자의 말을 영영 무시한다. 인바운드는 §5.1 클램프로 아침에 처리된다 |
+| self 예약은 블랙아웃 보정 안 함 | 보정하면 흐름이 밤새 열려 `pending_system_event`가 묶이고 플랜이 아침 이후로 밀린다. 블랙아웃 중 발화는 "응답 없으면 접는다"로 해석한다 |
+| `judged`만 deadline 예약 삭제 | 판정됐는데 마감이 발화하면 유령 흐름이 열린다. `due_keep`은 아직 살아 있는 의무라 예약을 지울 이유가 없다 |
+| judged된 `pool_id` 상속 reserve는 폐기 | `main` 강등은 슬롯 의미(네임스페이스)를 흐트러뜨린다 |
+| continue의 무효 prompt는 `flows.prompt`로 대체 | 재시도보다 싸고 불변식 (d)를 깨지 않는다. `end`는 흐름이 닫히므로 폐기로 충분하다 |
+| 불변식을 타이머 조준으로 | "최소 1개 예약 또는 `system_timer`"는 `system_timer`가 항상 살아 있어 공허했다. 흐름이 열린 동안의 진행은 (d)가 따로 보장해야 한다 |
+| 플랜·압축에 도구 없음 | 짧은 단발 호출이다. 플랜은 INDEX 대신 `state.md`를 받는다 |
+| reserve·흐름 닫기까지 `TurnTx`에 포함, 전송은 커밋 뒤(outbox) | 전송과 reserve 사이 크래시로 다음 예약이 사라지는 구멍을 없앤다. 커밋 후 전송 전 크래시는 outbox 재전송으로 메워 DB 대화 기록과 사용자가 본 것이 어긋나지 않게 한다 |
 | `provider`별 잔액 확인 | OpenAI에는 잔액 조회 API가 없다 |
 | `turn_generation`을 파싱 직후에 비교 | 호출 전은 취소를 못 잡고, 커밋 후는 롤백이 늦다 |
 | `messages` 전송 중 403은 중단 | 403은 차단이라 이후 전송도 실패한다 |
@@ -750,7 +816,7 @@ loop:
 |---|---|---|
 | 1 | 설치 직후 메시지 | `mode=paused` → 무시. 안내만 |
 | 2 | `/resume` | `mode=active`, 시스템 타이머 armed, 첫 플랜 |
-| 3 | 블랙아웃 중 메시지 | `ignored=blackout` 저장, 버퍼·인바운드 미생성 |
+| 3 | 블랙아웃 중 메시지(흐름 없음) | `pending` 인바운드 저장, 인바운드 예약은 블랙아웃 끝 |
 | 4 | 흐름 없음 + 메시지 → 디바운스 만료 | 인바운드 예약 생성(`inbound_prompt`), 발화 시 인바운드 흐름 |
 | 5 | 흐름 중 self-reserve 발화 | 턴 트리거 |
 | 6 | 흐름 중 다른 slot 예약 발화 | `fired` deferred, 흐름 종료 후 처리 |
@@ -762,7 +828,7 @@ loop:
 | 12 | 재시작(디바운스 대기) | 버퍼 복원, 만료 재예약 |
 | 13 | `pool_create` → 마감 발화 | `due` 전이, 마감 흐름이 `pool_items.prompt` 사용 |
 | 14 | `pool_judge(judged)` | `judged`+사유, deadline 예약 삭제 |
-| 15 | `pool_judge(due_keep)` | `due` 유지, retry 예약 |
+| 15 | `pool_judge(due_keep)` + `reserve` | `due` 유지, `slot=deadline`·`payload.pool_id` 상속한 새 예약 |
 | 16 | `pool_create(replaces=원본)` | 원본 `reissued`, 원본 deadline 예약 삭제, 신규 `pending` |
 | 17 | 풀 상한 초과 | 오래된 것 `expired`, deadline 예약 삭제 |
 | 18 | 인바운드 상한/시간 초과 | 오래된 `pending` `expired` |
@@ -770,7 +836,7 @@ loop:
 | 20 | `reserve.at` 30초 뒤 | `min_lead`로 밀림 |
 | 21 | 파싱 실패 3회 연속 | 백오프 증가, 알림 1회, 흐름 유지 |
 | 22 | `/cancel` during turn | `turn_generation++`, 파싱 직후 롤백·폐기, 흐름 닫힘, 정리 skip, deferred 처리, 슬롯 교체 |
-| 23 | 블랙아웃 진입 + 활성 흐름 | `pending_system_event=1`, 흐름 이어짐. 종료 후 플랜 |
+| 23 | 블랙아웃 진입 + 활성 흐름 | `pending_system_event=1`, 흐름 이어짐(사용자 응답 처리). 종료 후 플랜 |
 | 24 | 5000자 메시지 | 분할 전송 |
 | 25 | 모델이 목록 밖 도구 호출 | 거부 결과 반환, 턴 계속 |
 | 26 | `flow=end` 시 `pending_self_reservation_id` | 그 행 삭제, `end`의 reserve는 새 흐름 개시용 |
@@ -780,7 +846,7 @@ loop:
 | 30 | `/pause` + 활성 흐름 | 흐름 닫힘, 정리 실행, 버퍼 `late`, deferred 미처리 |
 | 31 | `/resume` + 과거 `scheduled` | deferred 먼저, 그다음 과거 예약 즉시 발화 |
 | 32 | `daily_call_limit` 도달 | `pause_reason=daily_limit`, 다음 자정까지 보류 |
-| 33 | `consume_random=true` | 그 흐름 첫 턴 성공 후 `random_due` 1 감소. 실패 시 미감소 |
+| 33 | `consume_random=true` | `turn_count` 0→1 커밋에서 `random_due` 1 감소. 실패 시 미감소, 둘째 턴부터는 무시 |
 | 34 | `system_event` + 활성 흐름 반복 | 큐 재순환 없음. 플래그만 |
 | 35 | 재시작 + `fired`만 존재 | 복구 6단계에서 deferred 처리 |
 | 36 | `messages` 전송 중 403 | 남은 전송 중단, `/pause` 처리 |
@@ -790,3 +856,15 @@ loop:
 | 40 | 부트스트랩 세트만으로 실행 | 매일 세 번 안부를 묻는 흐름이 돈다 |
 | 41 | `reserve.prompt`가 `../../etc` | 경로 검증에서 거부, 그 예약 폐기 |
 | 42 | `memory_read(name="../../x")` | 거부 결과 반환 |
+| 43 | continue + `reserve.prompt` 무효 | `flows.prompt`로 대체해 self 예약 생성, 흐름 유지 |
+| 44 | end + `reserve.prompt` 무효 | 그 예약만 폐기, 흐름 닫힘 |
+| 45 | 재시도 실패 | 백오프 예약이 `pending_self_reservation_id`로 등록 |
+| 46 | deadline 흐름에서 `pool_judge(judged)` + `reserve` | reserve 폐기. continue였으면 흐름 닫힘(`orphaned_pool`) |
+| 47 | 이미 `due`인 항목의 deadline 재발화 | `due_at` 유지 |
+| 48 | 블랙아웃 중 활성 흐름에 사용자 응답 | 디바운스 턴 정상 실행 |
+| 49 | 블랙아웃 중 self 예약 발화, 대기 user 메시지 없음 | 턴 없이 흐름 닫힘(`blackout`), 정리 → 플랜 |
+| 50 | 블랙아웃 중 백오프 self 예약 발화, 대기 user 메시지 있음 | 턴 실행 |
+| 51 | 커밋 후 전송 전 크래시 | 재시작 시 outbox 재전송 |
+| 52 | 전송 중 403 | 남은 메시지 `undelivered`, 컨텍스트에서 제외 |
+| 53 | 첫 실행 | `mode=paused`, 카운터 0, 타이머 꺼짐 |
+| 54 | 플랜·압축 호출 | `tools` 미제공 |
