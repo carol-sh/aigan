@@ -2,11 +2,15 @@
 # 바꾸면 재시작해야 반영된다.
 
 # 연결
+# deepseek는 잔액 조회 어댑터가 생길 때까지 serve가 거부한다
 provider=openai
 model=
 reasoning_effort=
 api_key=
+# 비우면 공식 주소
+llm_base_url=
 bot_token=
+telegram_api_root=
 owner_chat_id=
 daily_call_limit=
 # provider=deepseek일 때만

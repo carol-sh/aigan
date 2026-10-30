@@ -21,6 +21,7 @@
 | [`plans/gate.md`](plans/gate.md) | 5단계 게이트 구현 계획. 일일 상한·잔액 확인, 보류 진입과 알림, 잔액 해제 |
 | [`plans/plan.md`](plans/plan.md) | 6단계 계획 실행기 구현 계획. 계획 입력·출력·커밋, 시각 범위와 상한, `plan-rules.md` 작성용 계약 |
 | [`plans/compact.md`](plans/compact.md) | 7단계 압축 구현 계획. 압축 범위와 `answered_upto_id`, 턴·정리 입력의 요약, `compact-rules.md` 작성용 계약 |
+| [`plans/adapters-cli.md`](plans/adapters-cli.md) | 8단계 어댑터·CLI 구현 계획. OpenAI·텔레그램 어댑터, `serve`·`reset`·`memory`, 실행 방법과 수동 스모크 절차 |
 
 ## 프롬프트 작성용
 

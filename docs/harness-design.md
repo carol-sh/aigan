@@ -910,6 +910,8 @@ out = await llm(ctx)
 | `bot_token`, `owner_chat_id` | — | |
 | `daily_call_limit` | — | 일일 LLM 요청 상한(§6.3) |
 | `balance_threshold`, `balance_retry_sec` | — | `deepseek`일 때만(§6.3) |
+| `llm_base_url` | (비움) | OpenAI 호환 API 주소. 비우면 SDK 기본 주소. 프록시·테스트용 |
+| `telegram_api_root` | (비움) | 텔레그램 Bot API 주소. 비우면 공식 주소. 로컬 Bot API 서버·테스트용 |
 
 **시간**
 
