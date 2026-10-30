@@ -634,7 +634,8 @@ select():
 ```
 run Turn(kind, x):
   if not gate(): return                            # 보류 진입. 아무것도 바꾸지 않음
-  tx: failure_count++; turn_retry_at = now + backoff(failure_count)   # 시도 선기록. 커밋이 지운다
+  tx: if failure_count == failure_alert_after: 운영자 알림   # 끝나지 못한 시도(크래시 포함)까지 센다
+      failure_count++; turn_retry_at = now + backoff(failure_count)   # 시도 선기록. 커밋이 지운다
   # pre: 읽기만
   day = 현재 계획일                                 # 이 턴의 계획일. 입력·도구 검증·커밋이 모두 쓴다
   ctx = assemble(kind, x, day)                     # §5.1 입력
@@ -680,10 +681,10 @@ run Turn(kind, x):
       else: close_flow(f, 'agent')                 # 블랙아웃이면 continue여도 select가 곧 Close(blackout)
 
   send_outbox()                                    # §9.7
-  if f 열림: 압축 검사(v3 §13.2, gate 포함)     # 범위는 id <= f.answered_upto_id까지
+  if f 열림: 압축 검사(v3 §13.2, gate 포함)     # 범위는 id <= f.answered_upto_id까지. 비면 부르지 않는다
 ```
 
-- **미응답은 압축하지 않고, `answered_upto_id`는 뒤로 가지 않는다.** `upto`는 ctx 원문에 넣은 user 메시지로 정해지는데, 압축된 구간은 원문으로 들어가지 않는다. 압축이 미응답을 덮거나 흐름의 user 메시지를 모두 덮은 뒤의 턴은 `upto`가 미응답에 닿지 못하거나 비어서, 성공한 턴이 미응답을 지우지 못한다. 그러면 `select`가 같은 `Turn(reply)`를 백오프 없이(성공이 지운다) 계속 고른다. 그래서 압축 범위는 `answered_upto_id`에서 멈추고(남은 구간이 목표 크기보다 커도), 커밋은 `MAX`로 갱신한다.
+- **미응답은 압축하지 않고, `answered_upto_id`는 뒤로 가지 않는다.** `upto`는 ctx 원문에 넣은 user 메시지로 정해지는데, 압축된 구간은 원문으로 들어가지 않는다. 압축이 미응답을 덮거나 흐름의 user 메시지를 모두 덮은 뒤의 턴은 `upto`가 미응답에 닿지 못하거나 비어서, 성공한 턴이 미응답을 지우지 못한다. 그러면 `select`가 같은 `Turn(reply)`를 백오프 없이(성공이 지운다) 계속 고른다. 그래서 압축 범위는 `answered_upto_id`에서 멈추고(남은 구간이 목표 크기보다 커도), 커밋은 `MAX`로 갱신한다. 임계를 넘었어도 덮을 메시지가 없으면 압축을 부르지 않는다(턴마다 빈 호출이 붙지 않게).
 
 - 무시는 `id <= upto`인 `pending`만 표시한다. io 중에 와서 LLM이 보지 못한 메시지는 `pending`으로 남아 다음 판정을 받는다.
 - 커밋 직전 스냅샷 재검증은 하지 않는다. 루프가 하나고 리셋은 오프라인이라 io 동안 바뀌는 것은 새 메시지 삽입, `scheduled→fired`, 시각뿐이다. 앞의 둘은 커밋과 충돌하지 않는다. 시각은 계획일을 pre에서 고정해(`day`) 다루고, 블랙아웃 시작을 넘긴 경우만 위처럼 본다: AI 개시 턴은 취소, 나머지는 커밋하고 보낸 뒤 흐름이 닫힌다(§4.3).
@@ -708,12 +709,11 @@ tx: # failure_count·turn_retry_at은 시작 때 이미 올렸다
       continue/reply: close_flow(x, 'failed')
       output_fail_count=0; output_fail_key=NULL    # failure_count·turn_retry_at은 유지
       운영자 알림(포기한 트리거, 마지막 오류)
-    elif failure_count == failure_alert_after: 운영자 알림
 ```
 
 트리거(예약 `fired`, 미응답, `pending`)는 그대로 남으므로 `turn_retry_at`이 지나면 `select`가 같은 작업을 다시 고른다. v3의 "백오프 self 예약 삽입"을 대신한다.
 
-- **시도는 io 전에 기록한다.** `failure_count`와 `turn_retry_at`을 호출 전에 올려 두고, 성공 커밋(말 없는 턴 포함)이 지운다. io 뒤 커밋 전에 프로세스가 죽으면(버그, OOM) 실패 처리를 거치지 않으므로, 실패 뒤에 올리면 재시작 직후 같은 호출이 백오프 없이 다시 나간다. 자동 재시작과 만나면 끝없이 과금된다. 선기록이면 크래시도 실패 한 번으로 세어 백오프를 따른다. 크래시는 출력 실패가 아니라 `output_fail_count`는 그대로다. 정리·계획도 같다(§9.6).
+- **시도는 io 전에 기록한다.** `failure_count`와 `turn_retry_at`을 호출 전에 올려 두고, 성공 커밋(말 없는 턴 포함)이 지운다. `failure_alert_after` 알림도 이 tx에서 검사해, `fail_turn`을 거치지 않는 크래시 반복도 알린다. io 뒤 커밋 전에 프로세스가 죽으면(버그, OOM) 실패 처리를 거치지 않으므로, 실패 뒤에 올리면 재시작 직후 같은 호출이 백오프 없이 다시 나간다. 자동 재시작과 만나면 끝없이 과금된다. 선기록이면 크래시도 실패 한 번으로 세어 백오프를 따른다. 크래시는 출력 실패가 아니라 `output_fail_count`는 그대로다. 정리·계획도 같다(§9.6).
 - **포기해도 백오프는 이어진다.** 포기는 그 트리거를 버릴 뿐, `failure_count`와 `turn_retry_at`은 성공 때만 지운다. 프롬프트 파일이 깨진 경우처럼 트리거와 무관한 출력 실패면, 리셋할 경우 트리거마다 호출 6번(파싱 재시도 포함)이 백오프 없이 다시 시작된다. 유지하면 다음 트리거는 커진 백오프 뒤에 돌고, 간격은 `failure_backoff_cap_sec`까지 늘어난다.
 
 - **포기는 출력 실패만 센다.** 같은 입력이면 다시 해도 같은 출력 실패가 날 가능성이 높아, 그대로 두면 그 작업 하나가 백오프 상한 간격으로 영원히 다시 골라지며 판정·계획·다른 개입을 모두 막는다. 재시작해도 트리거가 남아 풀리지 않는다. 전송 실패(네트워크·5xx·타임아웃)는 API가 잠깐 죽은 것일 수 있으므로 백오프만 하고 트리거를 버리지 않는다. 출력 실패 사이에 전송 실패가 끼어도 `output_fail_count`는 성공 전까지 이어진다.
@@ -1091,10 +1091,10 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | 76 | 파싱 1회 실패 | 재시도 |
 | 76a | 턴 시작 | io 전에 `failure_count++`, `turn_retry_at=now+backoff` 기록. 성공 커밋(말 없는 턴 포함)이 지움 |
 | 77 | 재시도 실패 / 네트워크 오류 | `fail_turn`: 시작 때 올린 `failure_count`·`turn_retry_at` 유지, 출력 실패면 `output_fail_*` 갱신 |
-| 78 | `failure_alert_after` 도달 | 알림 1회 |
+| 78 | `failure_alert_after` 도달 | 다음 시도의 선기록 tx에서 알림 1회 |
 | 79 | 백오프 중 | 어떤 턴도, 계획도 안 고름. `Close(blackout)`·정리·날 넘김은 돎 |
 | 80 | 턴 io 중 또는 `fail_turn` tx 중 크래시 | 트리거 그대로. 재시작 뒤 선기록된 `turn_retry_at`까지 기다렸다 재시도 |
-| 80a | io 뒤 커밋 전 크래시가 매번 반복(자동 재시작) | 호출 간격이 백오프를 따라 늘어남(상한 `failure_backoff_cap_sec`). 백오프 없는 재호출 없음 |
+| 80a | io 뒤 커밋 전 크래시가 매번 반복(자동 재시작) | 호출 간격이 백오프를 따라 늘어남(상한 `failure_backoff_cap_sec`). 백오프 없는 재호출 없음. `failure_alert_after`번째 뒤 시도에서 알림 1회 |
 | 81 | 실패 뒤 성공 | `failure_count=0`, `turn_retry_at=NULL` |
 | 82 | 실패한 `Turn(open)` | 예약 `fired` 유지. `turn_retry_at` 뒤 같은 예약으로 다시 |
 | 82a | `Turn(open)` 출력 실패 `turn_max_attempts`번 | 예약 삭제, `settle()`, 알림, `output_fail_*`만 초기화. 다음 작업은 `turn_retry_at` 뒤 |
@@ -1119,6 +1119,7 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | 88 | 압축 임계 초과 | `summary`·`compacted_until_id` 갱신 |
 | 89 | 압축 실패 | 로그. 다음 턴 뒤 재시도 |
 | 89a | 압축 대상에 미응답(`id > answered_upto_id`)이 걸림 | 범위가 `answered_upto_id`에서 멈춤. 미응답은 다음 턴에 원문으로 들어감 |
+| 89c | 압축 임계 초과, 덮을 수 있는 메시지(`id <= answered_upto_id`) 없음 | 압축 호출 없음 |
 | 89b | 압축이 흐름의 user 메시지를 모두 덮은 뒤 `Turn(continue)` | ctx 원문에 user 메시지 없음. `answered_upto_id` 유지(뒤로 가지 않음), 이어서 `Turn(reply)`가 골라지지 않음 |
 | 90 | 계획·정리·압축 호출 | 턴 도구 미제공 |
 | 90a | 정리 입력 | 대화 원문(압축된 구간 포함), 흐름의 계획일 목표 전체와 `flow_goals` 목표(진행 메모·종료 사유, `flow_goals`면 "이 흐름에서 다룸"), 흐름 정보. persona 없음 |
