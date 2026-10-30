@@ -1,6 +1,7 @@
 import { inTransaction } from "../db/transaction.ts";
 import { cleanupBackoffDelaySec } from "../time.ts";
 import type { HarnessContext } from "./context.ts";
+import { alertOperator } from "./operator-alert.ts";
 import type { CleanupTask } from "./tasks.ts";
 import { createCleanupTools } from "./tools/cleanup-tools.ts";
 import { MemoryChanges } from "./tools/memory-changes.ts";
@@ -23,7 +24,7 @@ export async function runCleanup(
 ): Promise<void> {
   const flow = ctx.flows.findById(task.flowId)!;
   if (flow.cleanup_attempts >= ctx.config.cleanup_max_attempts) {
-    giveUpCleanup(ctx, flow.id);
+    await giveUpCleanup(ctx, flow.id);
     return;
   }
   const attempts = recordCleanupAttempt(ctx, flow.id, flow.cleanup_attempts + 1);
@@ -33,7 +34,7 @@ export async function runCleanup(
     await decider.decide({ flowId: flow.id, tools: createCleanupTools(ctx.config, memory) });
   } catch (error) {
     ctx.logger.warn(`흐름 ${flow.id}의 정리가 실패했다(${attempts}번째)`, error);
-    if (attempts >= ctx.config.cleanup_max_attempts) giveUpCleanup(ctx, flow.id);
+    if (attempts >= ctx.config.cleanup_max_attempts) await giveUpCleanup(ctx, flow.id);
     return;
   }
 
@@ -49,7 +50,10 @@ function recordCleanupAttempt(ctx: HarnessContext, flowId: number, attempt: numb
   return ctx.flows.recordCleanupAttempt(flowId, retryAt);
 }
 
-function giveUpCleanup(ctx: HarnessContext, flowId: number): void {
+async function giveUpCleanup(ctx: HarnessContext, flowId: number): Promise<void> {
   ctx.flows.finishCleanup(flowId, "failed");
-  ctx.logger.warn(`흐름 ${flowId}의 정리를 포기했다(${ctx.config.cleanup_max_attempts}번 실패)`);
+  await alertOperator(
+    ctx,
+    `흐름 ${flowId}의 정리를 포기했다(${ctx.config.cleanup_max_attempts}번 실패). 이 흐름의 기억 정리는 빠진다.`,
+  );
 }

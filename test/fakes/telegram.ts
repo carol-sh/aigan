@@ -13,6 +13,13 @@ export class FakeTelegram implements Telegram {
   #nextUpdateId = 1;
   #nextMessageId = 1;
 
+  /** 보낸 것 중 운영자 알림만. 앞의 표식은 뗀다. */
+  get alerts(): string[] {
+    return this.sent
+      .filter((text) => text.startsWith("[aigan 알림] "))
+      .map((text) => text.slice("[aigan 알림] ".length));
+  }
+
   failNextSends(...failures: ScriptedFailure[]): void {
     this.#scriptedFailures.push(...failures);
   }

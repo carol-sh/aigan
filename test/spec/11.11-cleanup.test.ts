@@ -59,7 +59,7 @@ test("83, 90d: 정리가 성공하면 기억 쓰기와 done이 함께 커밋된�
   });
 });
 
-test("84, 85: 정리 실패는 30초부터 두 배씩 300초까지 미루고, cleanup_max_attempts에 닿으면 failed로 두고 다음 작업으로 간다", async (t) => {
+test("84, 85: 정리 실패는 30초부터 두 배씩 300초까지 미루고, cleanup_max_attempts에 닿으면 failed로 두고 알린 뒤 다음 작업으로 간다", async (t) => {
   const fail: CleanupScript = async (cleanup) => cleanup.fail();
   const app = await startWithClosedFlow(t, Array(6).fill(fail), {
     config: { cleanup_max_attempts: "6" },
@@ -70,10 +70,13 @@ test("84, 85: 정리 실패는 30초부터 두 배씩 300초까지 미루고, cl
 
   assert.deepEqual(cleanupStartedSeconds(app), [0, 30, 90, 210, 450, 750]);
   assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "failed");
+  assert.deepEqual(app.telegram.alerts, [
+    "흐름 1의 정리를 포기했다(6번 실패). 이 흐름의 기억 정리는 빠진다.",
+  ]);
   assert.equal(app.llmTasks.at(-1), "10-30 10:12 turn:user");
 });
 
-test("85a: 마지막 정리 시도의 io 중에 죽으면 재시작 뒤 호출 없이 failed로 둔다", async (t) => {
+test("85a: 마지막 정리 시도의 io 중에 죽으면 재시작 뒤 호출 없이 failed로 두고 알린다", async (t) => {
   const app = await startWithClosedFlow(t, [neverFinishes], {
     config: { cleanup_max_attempts: "1" },
   });
@@ -82,6 +85,7 @@ test("85a: 마지막 정리 시도의 io 중에 죽으면 재시작 뒤 호출 �
 
   assert.equal(cleanupStartedSeconds(app).length, 1);
   assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "failed");
+  assert.equal(app.telegram.alerts.length, 1);
 });
 
 test("90: 정리에는 턴 도구를 주지 않는다", async (t) => {
