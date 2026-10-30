@@ -124,6 +124,8 @@ active ──▶ done      (AI가 완료로 판정)
   - 흐름을 여는 커밋 tx는 그 시점의 흐름 밖 메시지를 전부 흐름으로 옮긴다(`pending`은 `accepted`, `ignored`는 그대로). 무시한 메시지가 다음 흐름 대화에 남는 방식이 이것이다. 개시 턴 io 중에 온 메시지도 여기 포함되며, 턴이 보지 못한 것은 미응답으로 남아 디바운스 턴이 답한다.
   - 흐름을 닫는 tx는 미응답(`id > answered_upto_id`)을 흐름 밖 `pending`으로 옮긴다(v3 `close_flow` 4단계). 닫는 턴 io 중에 온 메시지가 여기 해당한다.
 - **무시한 메시지도 다음 흐름의 컨텍스트에 포함한다.** "아까 끝났다고 했잖아"를 막기 위함이다. 무시는 "응답하지 않음"이지 "모름"이 아니다.
+- **흐름 밖 메시지는 최근 `outside_messages_max`개만 쓴다.** 밤새 무시한 메시지가 쌓여도 입력이 끝없이 커지지 않게 한다. 턴 입력에는 최근 N개와 "(이전 흐름 밖 메시지 K개 생략)"만 넣고, 흐름을 여는 커밋은 N개 밖의 것을 옮기면서 `void_reason='trimmed'`로 표시한다(기록은 남고 컨텍스트·정리 입력에서 빠짐).
+- **턴 처리 중 온 메시지는 받지 않는다.** 턴 io 동안(도구 라운드·되묻기 포함) 온 사용자 메시지는 폴러가 텔레그램에서 지우고(`deleteMessage`, 봇은 개인 대화의 받은 메시지를 지울 수 있다) `void_reason='busy'`로 기록만 한다. 사용자에게는 보낸 메시지가 사라지는 것으로 보이고, io 동안 "입력 중" 표시(`sendChatAction typing`)가 떠 있어 이유를 알 수 있다. 메시지가 AI 답장보다 먼저 저장돼 "이미 답한 것처럼" 보이는 순서 문제(텔레그램에서 막을 수 없음)를 없앤다. 지우기가 실패하면 평소처럼 받는다(아래 경계 이동 규칙대로 미응답이 된다).
 - 전송은 outbox(`sent_at`)로 한다(v3 유지).
 
 ### 2.6 하루 계획 (`plans`)
@@ -227,7 +229,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 - 전송을 별도 워커로 빼지 않는 이유: 빼면 이전 턴 메시지가 나가기 전에 다음 턴이 돌 수 있고(사용자가 못 본 말을 본 걸로 가정), 403 보류가 루프와 어긋난다. 단일 사용자라 전송 대기로 루프가 막히는 비용은 작다.
 - **작업 단위**: 연달아 온 사용자 메시지는 디바운스로 묶어 턴 하나. 나머지 이벤트는 이벤트 하나가 작업 하나.
 - **흐름 = 게이트**: 흐름은 사용자 답장을 기다리는 시간까지 루프를 점유한다. 그 사이 발화한 개시 예약은 끼어들지 않고 `fired`로 보류된다(§4.1). 정리·계획도 흐름이 열린 동안에는 돌지 않는다.
-- **턴 중 도착한 메시지**: 턴 io 중에 온 사용자 메시지는 그 턴에 반영되지 않는다. 턴은 그대로 커밋하고, 그 메시지는 `answered_upto_id` 이후 미응답으로 남아 다음 턴의 입력이 된다.
+- **턴 중 도착한 메시지**: 턴 io 중에 온 사용자 메시지는 텔레그램에서 지우고 받지 않는다(§2.5). 지우기에 실패한 것만 그 턴에 반영되지 않은 채 `answered_upto_id` 이후 미응답으로 남아 다음 턴의 입력이 된다.
 - 큐의 진실은 DB다. 메모리 큐는 부팅 때 DB에서 재구성하는 캐시다(v3).
 
 ## 5. LLM 접점
@@ -239,7 +241,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | 항목 | 내용 |
 |---|---|
 | 계기 | 개시(AI·사용자), 이어가기, 흐름 내 사용자 메시지 |
-| 입력 | 턴 규칙 프롬프트, 방침 목록(`id`·`description`), 활성 목표(진행 메모, `job_snapshot`, 그 목표에 걸린 개시 예약의 id·at·intent 포함, 지난 계획일의 것은 표시), 오늘 종료된 목표(결과·사유), 오늘 계획(아직 없으면 "(계획 전)"), 직전 흐름 꼬리, 흐름 대화, 직전 흐름 이후 흐름 밖 메시지, 이벤트 블록(계기·이 흐름을 연 개시 예약의 `intent`·밀린(`fired`) 개시 예약 목록·현재 시각·오늘의 끝·새 목표와 예약이 쓸 수 있는 구간), 기억(state 전문, 칸 제목 목록) |
+| 입력 | 턴 규칙 프롬프트, 방침 목록(`id`·`description`), 활성 목표(진행 메모, `job_snapshot`, 그 목표에 걸린 개시 예약의 id·at·intent 포함, 지난 계획일의 것은 표시), 오늘 종료된 목표(결과·사유), 오늘 계획(아직 없으면 "(계획 전)"), 직전 흐름 꼬리, 흐름 대화, 직전 흐름 이후 흐름 밖 메시지(최근 `outside_messages_max`개), 이벤트 블록(계기·이 흐름을 연 개시 예약의 `intent`·밀린(`fired`) 개시 예약 목록·현재 시각·오늘의 끝·새 목표와 예약이 쓸 수 있는 구간), 기억(state 전문, 칸 제목 목록) |
 | 출력 | 보낼 메시지(0개 이상), 다음(`continue at` \| `end`) |
 | 도구 | `job_read`(id), `memory_read`(title), `goal_create`, `goal_update`(진행 메모·마감), `goal_close`(done/failed/dropped + 사유), `open_reserve`(at, intent, goal_ids), `open_cancel` |
 
@@ -386,7 +388,7 @@ prompts/
 | AI 개시 흐름 사이 간격 | 하네스 최소 간격 없음. 연속 개입의 빈도는 프롬프트가 정하고, 문제가 되면 서버를 멈추고 프롬프트를 고친다 | 밀린 개입 정보(§4.2) |
 | 예산 소진(일일 상한·잔액) | 복구 불가능한 장애로 본다. v3 보류 그대로(사용자 응답 포함 전부 멈춤), 별도 완화 없음 | v3 보류·운영자 알림 |
 | 흐름 하나의 최대 길이 | 하네스 상한 없음. 재촉 0회 이상 후 포기, 흐름 종료 모두 LLM이 정한다(흐름은 핑퐁이 아니어도 됨) | 밀린 개입 정보(§4.2), 블랙아웃 무응답 닫기(§4.3)가 자연 상한 |
-| 상한 기본값(`goal_max_active`, `open_max_pending`, `orphan_goal_delay`, `cleanup_max_attempts`, `turn_max_attempts`, `prev_flow_tail_messages`, `prev_flow_tail_max_age_sec`) | 결정 필요. `goal_max_active`는 묻기 목표와 할 일 목표가 함께 쓰는 점을 고려 | 설정 |
+| 상한 기본값(`goal_max_active`, `open_max_pending`, `orphan_goal_delay`, `cleanup_max_attempts`, `turn_max_attempts`, `prev_flow_tail_messages`, `prev_flow_tail_max_age_sec`, `outside_messages_max`) | 결정 필요. `goal_max_active`는 묻기 목표와 할 일 목표가 함께 쓰는 점을 고려 | 설정 |
 | 증거 첨부(사진 등) 수신 | 1차 범위 제외. 텍스트 메시지만 받음. 사용자의 감각을 빌리는 요청("창밖 찍어 봐")의 상당수가 여기에 걸린다(역전 검토 K3) | 메시지 타입 확장 |
 
 ---
@@ -480,7 +482,7 @@ v3에서 뺀 것: `current_flow_id`(열린 흐름은 `flows`에서 파생, I1은
 | `role` | TEXT | `user` / `assistant` |
 | `content`, `ts` | TEXT | |
 | `triage` | TEXT / NULL | user만. 흐름 안에서 받은 메시지는 NULL. 흐름 밖: `pending` → `ignored`, 흡수되면 `accepted`(`ignored`였던 것은 `ignored` 유지) |
-| `void_reason` | TEXT / NULL | `undelivered`(assistant, 전송 실패·낡음). 값이 있으면 컨텍스트·미응답 계산에서 뺀다 |
+| `void_reason` | TEXT / NULL | `undelivered`(assistant, 전송 실패·낡음), `busy`(user, 턴 io 중 도착해 지움), `trimmed`(user, 흐름 밖 상한 밖). 값이 있으면 컨텍스트·미응답 계산·정리 입력에서 뺀다 |
 | `sent_at` | TEXT / NULL | assistant만. outbox |
 | `tg_update_id` | INTEGER / NULL UNIQUE | 폴러 재수신 중복 방지 |
 
@@ -524,7 +526,7 @@ v3 §9를 기준으로 고친다. 핵심 차이는 **이벤트 큐가 없다**�
 
 | 생산자 | 하는 일 |
 |---|---|
-| 텔레그램 폴러 | `owner_chat_id` 확인 → `messages` 삽입(`tg_update_id` 중복이면 무시). 열린 흐름이 있으면 `flow_id`=그 흐름, 없으면 `flow_id=NULL, triage='pending'`. `wake()` |
+| 텔레그램 폴러 | `owner_chat_id` 확인 → `tg_update_id` 중복이면 무시. 턴 io 중(`busy` 플래그, 메모리)이면 `deleteMessage`, 성공하면 `void_reason='busy'`로 삽입하고 끝(`wake()` 없음). 그 밖(지우기 실패 포함)에는 `messages` 삽입: 열린 흐름이 있으면 `flow_id`=그 흐름, 없으면 `flow_id=NULL, triage='pending'`. `wake()` |
 | 타이머 | 다음 기한에 발화. `UPDATE reservations SET state='fired' WHERE state='scheduled' AND at<=now`. `wake()` |
 | 리셋 CLI | 프로세스가 멈춘 상태에서만 DB를 고친다(§9.11). 효과는 다음 부팅 때 보인다 |
 
@@ -610,6 +612,7 @@ run Turn(kind, x):
   # pre: 읽기만
   ctx = assemble(kind, x)                          # §5.1 입력
   upto = ctx에 넣은 user 메시지의 최대 id
+  busy = true; typing 표시 시작                     # io 동안 온 메시지는 폴러가 지운다(§2.5). 끝나면(finally) 둘 다 해제
   out = await llm(ctx)                             # 도구 라운드. 도구 효과는 TurnTx에 모은다
   if out 실패: fail_turn(kind, x, upto, 오류); return
   if orphans(kind, x, out) 있음:                   # 되묻기. 1회
@@ -628,6 +631,7 @@ run Turn(kind, x):
     if kind in (open, user):
       f = flows 삽입(opener, opened_by_*, plan_date=현재 계획일, answered_upto_id=0)
       flow_id IS NULL인 메시지 전부 → flow_id=f (pending → accepted)   # I8
+      그중 최근 outside_messages_max개 밖 → void_reason='trimmed'
       if kind=='open': x.goal_ids → flow_goals(f); x 삭제
     if not silent:
       도구 효과 반영(§9.5), flow_goals 기록
@@ -644,7 +648,7 @@ run Turn(kind, x):
 
 - 무시는 `id <= upto`인 `pending`만 표시한다. io 중에 와서 LLM이 보지 못한 메시지는 `pending`으로 남아 다음 판정을 받는다.
 - 커밋 직전 스냅샷 재검증은 하지 않는다. 루프가 하나고 리셋은 오프라인이라 io 동안 바뀌는 것은 새 메시지 삽입과 `scheduled→fired`뿐이며, 둘 다 커밋과 충돌하지 않는다.
-- io 중 온 메시지: 흐름이 있으면 그 흐름의 미응답(`id > upto`)으로 남아 다음 턴 입력이 된다. 흐름을 여는 턴이면 아직 흐름 밖이었다가 커밋 tx가 흡수하고, 역시 `id > upto`라 미응답이 된다.
+- io 중 온 메시지는 지워지므로(§2.5) 아래는 지우기에 실패한 경우다. 흐름이 있으면 그 흐름의 미응답(`id > upto`)으로 남아 다음 턴 입력이 된다. 흐름을 여는 턴이면 아직 흐름 밖이었다가 커밋 tx가 흡수하고, 역시 `id > upto`라 미응답이 된다.
 - `continue` 출력의 `at`이 누락·무효면 클램프로 메운다(§2.4. 상한은 흐름의 계획일 끝).
 - 도구 효과는 io 중에 모이므로, 하네스는 출력이 끝나야 이 턴이 말 없는 턴인지 안다. 그래서 호출 시점에 거부하지 않고 커밋에서 통째로 버린다. 일부만 버리면 같은 턴의 다른 효과가 버린 목표를 참조할 수 있어서다. 버린 경우의 로그는 프롬프트 개선 신호로 쓴다.
 - 원칙 6의 보장 범위: 상태를 바꾼 턴은 반드시 메시지를 하나 이상 outbox에 넣는다. 전송 실패(`undelivered`, 403)로 사용자가 못 받는 경우는 막지 않는다.
@@ -809,6 +813,7 @@ v3 부록 A에서 `inbound_*`, `pool_*`, `plan_max_items`, `random_*`을 빼고 
 | `cleanup_max_attempts` | 5 | |
 | `turn_max_attempts` | 3 | 같은 트리거의 연속 출력 실패가 여기 닿으면 포기(§9.4). 파싱 재시도 1회를 포함하면 호출 6번 |
 | `prev_flow_tail_messages` | 6 | 턴 입력의 직전 흐름 꼬리(§5.1) |
+| `outside_messages_max` | 20 | 턴 입력에 넣는 흐름 밖 메시지 수. 흐름을 열 때 그 밖의 것은 `trimmed`(§2.5) |
 | `prev_flow_tail_max_age_sec` | 10800 | 직전 흐름이 이 시간 안에 닫혔을 때만 꼬리를 넣는다(§5.1) |
 | `cleanup_backoff_first_sec` / `cleanup_backoff_cap_sec` | 30 / 300 | |
 | `cleanup_raw_max_chars` | 60000 | 정리에 대화 원문을 주는 상한. 넘으면 압축본 |
@@ -877,7 +882,12 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | 9 | 같은 `tg_update_id` 재수신 | 무시 |
 | 10 | `owner_chat_id`가 아닌 채팅 | 무시 |
 | 11 | "/pause" 같은 텍스트 | 일반 메시지 |
-| 12 | 흐름을 닫는 턴의 io 중 도착 | 닫는 tx가 흐름 밖 `pending`으로 옮김. 정리 뒤 판정 |
+| 12 | 흐름을 닫는 턴의 io 중 도착, 지우기 실패 | 닫는 tx가 흐름 밖 `pending`으로 옮김. 정리 뒤 판정 |
+| 12a | 턴 io 중 도착 | `deleteMessage`, `void_reason='busy'`로 기록, `wake()` 없음. 다음 턴 입력·미응답·정리 입력에 없음 |
+| 12b | 턴 io 동안 | "입력 중" 표시. io가 끝나면(성공·실패·예외) `busy`·표시 해제 |
+| 12c | 정리·계획·압축 io 중 도착 | 지우지 않음. 평소처럼 삽입 |
+| 12d | 흐름 밖 메시지 25개(`outside_messages_max`=20) 상태에서 판정 턴 | 입력에 최근 20개 + "(5개 생략)" |
+| 12e | 12d에서 흐름이 열림 | 25개 모두 흐름으로 옮김, 오래된 5개 `void_reason='trimmed'`. 이후 턴·정리 입력에 없음 |
 
 ### 11.3 작업 고르기·다음 기한
 
@@ -907,7 +917,7 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | 28 | `goal_ids` 일부만 종료 | 개시 |
 | 29 | 흐름 중 개시 예약 발화 | `fired`로 대기. 턴 컨텍스트의 밀린 개입 목록에 나옴 |
 | 30 | 밀린 개입을 `open_cancel`로 합침 | 삭제. 흐름이 닫힐 때 `settle()`이 남은 목표를 확인 |
-| 31 | 개시 턴 io 중 도착한 메시지 | 커밋 tx가 흡수. `id > upto`라 미응답 → 디바운스 뒤 `Turn(reply)` |
+| 31 | 개시 턴 io 중 도착한 메시지, 지우기 실패 | 커밋 tx가 흡수. `id > upto`라 미응답 → 디바운스 뒤 `Turn(reply)` |
 | 32 | 흐름이 닫힌 직후 다른 개시 예약이 `fired`(D1) | 최소 간격 없이 정리 뒤 바로 개시 |
 
 ### 11.5 사용자 개시·판정
@@ -916,7 +926,7 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 |---|---|---|
 | 33 | 메시지 1개 이상(받음) | 흐름(`opener='user'`). 흐름 밖 메시지 전부 이동(`pending`→`accepted`, `ignored` 유지) |
 | 34 | 메시지 0개(무시) | `id <= upto`인 `pending`만 `ignored`. 도구 효과 버림. 실패 상태 초기화 |
-| 35 | 무시한 턴의 io 중 도착 | `pending`으로 남음 → 새 디바운스 뒤 `Turn(user)`. 컨텍스트에 앞서 무시한 메시지 포함 |
+| 35 | 무시한 턴의 io 중 도착, 지우기 실패 | `pending`으로 남음 → 새 디바운스 뒤 `Turn(user)`. 컨텍스트에 앞서 무시한 메시지 포함 |
 | 36 | 무시 뒤 AI 개시 | 무시한 메시지가 새 흐름 대화에 들어감, `triage='ignored'` 유지 |
 | 37 | 메시지 0개 + `continue` | 무시와 같음. 흐름 안 엶 |
 | 38 | 블랙아웃 중 사용자 메시지 | 판정함. 받으면 흐름 열림 |
@@ -930,7 +940,7 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | 41 | continue 발화 전 사용자 답 | 디바운스 뒤 `Turn(reply)`, continue 교체 |
 | 42 | 디바운스 대기 중 continue 발화 | 만료까지 대기. 턴 하나가 둘 다 처리 |
 | 43 | 턴 io 중 continue 발화 | 커밋이 `fired` continue를 지우고 새로 삽입 |
-| 44 | 턴 io 중 메시지(m3) | 미응답으로 남아 다음 턴 입력 |
+| 44 | 턴 io 중 메시지(m3), 지우기 실패 | 미응답으로 남아 다음 턴 입력 |
 | 45 | `next=end` | `close_flow('agent')` |
 | 46 | `continue at` 누락 / 과거 / 1주 뒤 | 클램프(상한은 흐름의 계획일 끝) |
 | 47 | `continue at`이 블랙아웃 안 | 보정 안 함 |
