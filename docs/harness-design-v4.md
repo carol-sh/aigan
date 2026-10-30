@@ -90,7 +90,6 @@ active ──▶ done      (AI가 완료로 판정)
 | `agent` | AI가 턴 출력으로 종료 |
 | `blackout` | 블랙아웃 중 이어가기 예약이 발화했는데 미응답 메시지가 없음 |
 | `stale` | 재시작·보류 해제 후 이어가기 예약이 `stale_after_sec`보다 낡음 |
-| `reset` | 리셋 CLI |
 
 ### 2.4 예약 (`reservations`)
 
@@ -113,7 +112,7 @@ active ──▶ done      (AI가 완료로 판정)
 - 흐름 밖 사용자 메시지에는 판정 결과를 붙인다: `pending`(판정 전) → `accepted`(흐름이 열림) | `ignored`(무시).
 - **흐름 경계에서 메시지 이동**(I8):
   - 흐름을 여는 커밋 tx는 그 시점의 흐름 밖 메시지를 전부 흐름으로 옮긴다(`pending`은 `accepted`, `ignored`는 그대로). 무시한 메시지가 다음 흐름 대화에 남는 방식이 이것이다. 개시 턴 io 중에 온 메시지도 여기 포함되며, 턴이 보지 못한 것은 미응답으로 남아 디바운스 턴이 답한다.
-  - 흐름을 닫는 tx는 미응답(`id > answered_upto_id`)을 흐름 밖 `pending`으로 옮긴다(v3 `close_flow` 4단계). 닫는 턴 io 중에 온 메시지가 여기 해당한다. `reset`이면 옮기지 않는다.
+  - 흐름을 닫는 tx는 미응답(`id > answered_upto_id`)을 흐름 밖 `pending`으로 옮긴다(v3 `close_flow` 4단계). 닫는 턴 io 중에 온 메시지가 여기 해당한다.
 - **무시한 메시지도 다음 흐름의 컨텍스트에 포함한다.** "아까 끝났다고 했잖아"를 막기 위함이다. 무시는 "응답하지 않음"이지 "모름"이 아니다.
 - 전송은 outbox(`sent_at`)로 한다(v3 유지).
 
@@ -241,7 +240,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 ### 5.3 정리
 
 - 흐름이 닫힌 직후, 다음 흐름이 열리기 전에 반드시 실행한다(§4.2 0번). 그 흐름의 대화를 보고 memory를 읽고 쓴다(v3 §13.1의 정리 호출).
-- 상태: `pending` → `done` / `failed` / `skipped`(`reset`, 정리 규칙 파일 없음, 또는 주고받은 메시지가 0개인 빈 흐름).
+- 상태: `pending` → `done` / `failed` / `skipped`(정리 규칙 파일 없음, 또는 주고받은 메시지가 0개인 빈 흐름).
 - 입력·도구·memory 구조는 memory 설계와 함께 다시 정한다.
 
 ### 5.4 공통
@@ -264,7 +263,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | `answered_upto_id`로 미응답 계산, 디바운스 | 그대로 |
 | deferred(`fired` 대기) | 개시 예약에 적용 |
 | 백오프 공식, 클램프 | 그대로 |
-| 큐 휘발성·DB 진실, 단일 인스턴스 잠금, 리셋 CLI | 그대로 |
+| 큐 휘발성·DB 진실, 단일 인스턴스 잠금 | 그대로 |
 | 참조 스택(Node 24 + TS, node:sqlite, grammY, luxon, zod) | 그대로 |
 
 ### 6.2 버리거나 바꿈
@@ -279,6 +278,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | 흐름의 `origin_pool_id`, `pool_focus` | 개시 예약의 `goal_ids`, `intent` | 흐름은 목표에 묶이지 않는다 |
 | 정리: 닫힌 직후 1회 시도, 실패 시 `cleanup_timer` 백오프, 다음 흐름과 병행 | 다음 흐름 전 필수, 재시도 상한 후 `failed` | 다음 흐름이 직전 흐름의 기억을 반드시 본다. `cleanup_timer`·`cleanup_due` 제거 |
 | 계획: 흐름 중에도 실행(계획일 블랙아웃 조건) | 흐름이 닫힌 뒤 | 게이트 규칙을 단순하게. 블랙아웃 1시간 이상이라 지장 없음 |
+| 리셋 두 가지(`reset` 런타임만, `--all` 전부) | `reset` 하나. 첫 실행 상태(§9.11) | 리셋은 처음 켠 상태로 돌아가는 것. 런타임만 비우면 목표·흐름 밖 메시지의 처리 규칙이 따로 필요하다 |
 
 ---
 
@@ -349,7 +349,7 @@ v3에서 뺀 것: `current_flow_id`(열린 흐름은 `flows`에서 파생, I1은
 | `turn_count` | INTEGER | |
 | `answered_upto_id` | INTEGER | 마지막 커밋 턴이 컨텍스트에 넣은 user 메시지의 최대 id |
 | `started_at`, `ended_at` | TEXT / NULL | `ended_at IS NULL` = 열림 |
-| `end_reason` | TEXT / NULL | `agent` / `blackout` / `stale` / `reset` |
+| `end_reason` | TEXT / NULL | `agent` / `blackout` / `stale` |
 | `cleanup_status` | TEXT / NULL | `pending` / `done` / `failed` / `skipped` |
 | `cleanup_attempts`, `cleanup_next_at` | INTEGER, TEXT / NULL | 정리 재시도 |
 | `summary`, `compacted_until_id` | TEXT / NULL, INTEGER / NULL | 압축(v3 §13.2 그대로) |
@@ -383,7 +383,7 @@ v3에서 뺀 것: `current_flow_id`(열린 흐름은 `flows`에서 파생, I1은
 | `role` | TEXT | `user` / `assistant` |
 | `content`, `ts` | TEXT | |
 | `triage` | TEXT / NULL | user만. 흐름 안에서 받은 메시지는 NULL. 흐름 밖: `pending` → `ignored`, 흡수되면 `accepted`(`ignored`였던 것은 `ignored` 유지) |
-| `void_reason` | TEXT / NULL | `undelivered`(assistant, 전송 실패·낡음) / `reset`(미응답 user). 값이 있으면 컨텍스트·미응답 계산에서 뺀다 |
+| `void_reason` | TEXT / NULL | `undelivered`(assistant, 전송 실패·낡음). 값이 있으면 컨텍스트·미응답 계산에서 뺀다 |
 | `sent_at` | TEXT / NULL | assistant만. outbox |
 | `tg_update_id` | INTEGER / NULL UNIQUE | 폴러 재수신 중복 방지 |
 
@@ -551,9 +551,9 @@ TurnTx는 도구 효과를 모으고, 이후 도구 라운드는 그 효과가 �
 
 1. `f`의 continue 예약 삭제.
 2. `ended_at`, `end_reason`.
-3. `cleanup_status`: `reset`·정리 규칙 파일 없음·빈 흐름(메시지 0개)이면 `skipped`, 아니면 `pending`(`cleanup_next_at=now`, `cleanup_attempts=0`).
-4. 미응답 → `flow_id=NULL, triage='pending'`(I8). `reset`이면 옮기지 않고 `void_reason='reset'`.
-5. `reset`이 아니면 `settle()`.
+3. `cleanup_status`: 정리 규칙 파일 없음·빈 흐름(메시지 0개)이면 `skipped`, 아니면 `pending`(`cleanup_next_at=now`, `cleanup_attempts=0`).
+4. 미응답 → `flow_id=NULL, triage='pending'`(I8).
+5. `settle()`.
 
 **`settle()`** — 흐름 없이 끝나는 tx의 마지막 단계. I3 보정: 활성 목표 중 걸린 `open` 예약이 없는 것마다 `source='harness'` 예약 삽입(`at`=`due_at` 또는 `now+orphan_goal_delay_sec`, 클램프·블랙아웃, `intent`="후속 확인"). 로그.
 
@@ -633,19 +633,16 @@ v3 부록 A에서 `inbound_*`, `pool_*`, `plan_max_items`, `random_*`을 빼고 
 
 ### 9.11 리셋 CLI
 
-v3 §15.3을 고친다. 프로세스가 멈춘 상태에서만 동작한다(잠금 획득 실패 시 거부).
+리셋은 **처음 서버를 켠 상태**로 되돌린다. v3의 두 가지(`reset` 런타임만, `--all` 전부)를 하나로 합친다. 프로세스가 멈춘 상태에서만 동작하고(잠금 획득 실패 시 거부), 확인 입력을 요구한다.
 
-**`aigan reset`** — 런타임 상태만 비운다. `messages`, `flows`, `goals`(행), `plans`, `llm_calls`, memory는 기록으로 남긴다.
+**`aigan reset`**
 
-- 열린 흐름 → `close_flow(f, 'reset')`(정리 `skipped`, 미응답 `void_reason='reset'`, `settle` 없음).
-- `reservations` 전부 삭제.
-- `active` 목표 → `dropped`, `end_reason='reset'`. 예약이 모두 사라지므로 살려 두면 I3가 깨진다. v3가 풀 항목을 `cancelled`로 닫던 것과 같다.
-- 흐름 밖 메시지(`pending`·`ignored`) → `void_reason='reset'`.
-- outbox → `undelivered`. `cleanup_status='pending'` → `skipped`.
-- `harness_state`: 보류, `failure_count`, `turn_retry_at`, `plan_attempts`, `plan_retry_at`, `last_plan_date` 초기화. `daily_calls`는 유지한다.
-- 다음 부팅에서 계획이 바로 돈다.
+1. DB 파일과 memory 폴더를 `backup/<시각>/`으로 옮긴다. 지우지 않는 것은 실수로 리셋했을 때 되돌릴 수 있게 하기 위해서다. 백업은 자동으로 지우지 않는다.
+2. 설정·프롬프트는 그대로 둔다.
+3. 다음 부팅은 첫 실행과 같다(마이그레이션 → 초기값 → 계획 밀림이라 즉시 `Plan`).
 
-**`aigan reset --all`** — DB와 memory를 지운다(설정·프롬프트는 유지). 확인 입력을 요구한다.
+- 런타임만 비우는 리셋을 두지 않으므로 `close_flow(f, 'reset')`, `void_reason='reset'` 같은 리셋 전용 경로가 없다. 목표·흐름 밖 메시지를 어떻게 처리할지도 정할 필요가 없다.
+- `daily_calls`도 초기화된다. v3는 비용 상한을 우회하지 못하게 유지했지만, 단일 사용자가 자기 비용으로 운영하므로 리셋이 곧 그 사람의 결정이다.
 
 ---
 
@@ -673,8 +670,8 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | 2 | 첫 계획이 예약 0개 | 다음 계획까지 AI가 먼저 말 걸지 않음. 사용자 메시지는 판정 |
 | 3 | 블랙아웃 설정 비었음 / 턴 규칙 프롬프트 없음 | 시작 실패 |
 | 4 | 두 번째 인스턴스 / 실행 중 `aigan reset` | 잠금 거부 |
-| 5 | `aigan reset`(열린 흐름, 활성 목표, 흐름 밖 메시지, outbox, 정리 `pending` 있음) | 흐름 `reset`(정리 `skipped`, 미응답 `void_reason='reset'`), 예약 전부 삭제, 활성 목표 `dropped('reset')`, 흐름 밖 메시지 void, outbox `undelivered`, `daily_calls` 유지, 다음 부팅에 `Plan` (L4) |
-| 6 | `aigan reset --all` | 첫 실행 상태 |
+| 5 | `aigan reset` 후 시작 | 1번과 같은 첫 실행 상태(`daily_calls` 포함). 이전 DB·memory는 백업 폴더에 있음 (L4) |
+| 6 | `aigan reset` 확인 입력 거부 | 아무것도 안 바뀜 |
 
 ### 11.2 수신
 
@@ -891,6 +888,6 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | L1 | 다음 기한에 이미 지난 값(흐름 중 밀린 계획의 `MAX(now, …)`, 백오프·보류에 막힌 디바운스)이 들어가 타이머가 즉시 발화하는 바쁜 루프 | `now`보다 뒤인 값만 조준(§9.1) |
 | L2 | 계획이 `plan` 예약을 교체하면서 목표에 걸린 예약이 사라져도 I3 보정이 없음 | `Plan` tx 끝에 `settle()`(§9.6) |
 | L3 | 흐름 밖 `pending`이 디바운스 중인데 `fired` 개시 예약이 있으면 개시 턴이 쓰다 만 입력을 흡수해 답함 | 디바운스 중이면 1~3 모두 대기(§9.3) |
-| L4 | v4 리셋이 정의되지 않음. v3 규칙대로 예약만 지우면 활성 목표가 예약 없이 남아 I3가 깨짐 | §9.11. 활성 목표 `dropped('reset')` |
+| L4 | v4 리셋이 정의되지 않음. v3 규칙대로 예약만 지우면 활성 목표가 예약 없이 남아 I3가 깨짐 | §9.11. 리셋은 첫 실행 상태로(DB·memory를 백업 폴더로 옮김) |
 | L5 | AI 개시 턴에서 곧 지워질 `x`가 I6 집계에 들어가 상한이 1 줄어듦 | `x`는 지운 것으로 봄(§9.5) |
 | L6 | 개입 취소(메시지 0개 + `end`)가 도구 효과를 버려 "15시에 다시"로 미룰 수 없음 | 취소에서도 도구 효과 반영(§9.4) |
