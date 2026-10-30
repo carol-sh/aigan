@@ -169,6 +169,12 @@ active ──▶ done      (AI가 완료로 판정)
 
 ## 4. 이벤트와 반응
 
+하루 동안 예약·흐름·목표가 생기고 사라지는 예시:
+
+![하루](harness-day.png)
+
+원본: [`harness-day.drawio`](harness-day.drawio)
+
 ### 4.1 이벤트 표
 
 | 이벤트 | 흐름 없음 | 흐름 열림 |
