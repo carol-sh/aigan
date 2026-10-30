@@ -62,6 +62,18 @@ export class HarnessStateRepository {
       .run();
   }
 
+  /** 요청 한 건을 센다. 날짜가 바뀌었으면 먼저 0으로 되돌린다. */
+  countLlmRequest(localDate: string): void {
+    this.#db
+      .prepare(
+        `UPDATE harness_state
+         SET daily_calls = CASE WHEN daily_calls_date = :localDate THEN daily_calls + 1 ELSE 1 END,
+             daily_calls_date = :localDate
+         WHERE id = 1`,
+      )
+      .run({ localDate });
+  }
+
   recordPlanAttempt(retryAt: DateTime): void {
     this.#db
       .prepare(
