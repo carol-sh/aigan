@@ -1,6 +1,6 @@
 # aigan 하네스 설계 v4 (골격)
 
-- 상태: 초안. 개체 모델과 관계를 확정하기 위한 골격이며, DB 컬럼·워커 의사코드·테스트 목록은 골격 합의 후 작성한다.
+- 상태: 초안. 골격(§1–§7) 합의 후 DB 스키마(§8)와 워커 의사코드(§9)를 붙였다. 테스트 목록은 다음 단계.
 - 참고: `harness-design.md`(v3.0), `harness-trace.md`. v3는 버리지 않고 실행 계층의 참고로 쓴다(§6).
 
 ---
@@ -112,7 +112,7 @@ active ──▶ done      (AI가 완료로 판정)
 - 흐름 안의 메시지와 흐름 밖의 사용자 메시지를 모두 기록한다.
 - 흐름 밖 사용자 메시지에는 판정 결과를 붙인다: `pending`(판정 전) → `accepted`(흐름이 열림) | `ignored`(무시).
 - **흐름 경계에서 메시지 이동**(I8):
-  - 흐름을 여는 커밋 tx는 그 시점의 흐름 밖 `pending` 메시지를 전부 흐름으로 옮긴다(`accepted`). 개시 턴 io 중에 온 메시지도 여기 포함되며, 턴이 보지 못한 것은 미응답으로 남아 디바운스 턴이 답한다.
+  - 흐름을 여는 커밋 tx는 그 시점의 흐름 밖 메시지를 전부 흐름으로 옮긴다(`pending`은 `accepted`, `ignored`는 그대로). 무시한 메시지가 다음 흐름 대화에 남는 방식이 이것이다. 개시 턴 io 중에 온 메시지도 여기 포함되며, 턴이 보지 못한 것은 미응답으로 남아 디바운스 턴이 답한다.
   - 흐름을 닫는 tx는 미응답(`id > answered_upto_id`)을 흐름 밖 `pending`으로 옮긴다(v3 `close_flow` 4단계). 닫는 턴 io 중에 온 메시지가 여기 해당한다. `reset`이면 옮기지 않는다.
 - **무시한 메시지도 다음 흐름의 컨텍스트에 포함한다.** "아까 끝났다고 했잖아"를 막기 위함이다. 무시는 "응답하지 않음"이지 "모름"이 아니다.
 - 전송은 outbox(`sent_at`)로 한다(v3 유지).
@@ -137,7 +137,7 @@ active ──▶ done      (AI가 완료로 판정)
 | I5 | 개시 예약은 블랙아웃 안에서 `scheduled`로 존재하지 않는다 | v3 블랙아웃 규칙 |
 | I6 | `source≠harness`인 대기 개시 예약 수 ≤ `open_max_pending`, 활성 목표 수 ≤ `goal_max_active` | 신규 상한. 보정 예약은 제외(활성 목표 수로 이미 묶임) |
 | I7 | 다음 시스템 작업(계획)을 깨울 타이머가 항상 무장돼 있다 | v3 (a) |
-| I8 | 흐름이 열려 있으면 흐름 밖 `pending` 사용자 메시지는 없다 | 신규. §2.5 경계 이동 |
+| I8 | 흐름이 열려 있으면 흐름 밖 사용자 메시지는 없다(`pending`·`ignored` 모두) | 신규. §2.5 경계 이동 |
 
 **I3 보정**: 흐름이 닫힐 때(어떤 사유든) 하네스가 I3를 검사한다. 걸린 목표가 있으면 개시 예약을 하네스가 만든다(`source='harness'`, `at = due_at`이 있으면 `due_at`, 없으면 `now + orphan_goal_delay`, `intent`는 "후속 확인"). 턴 규칙 프롬프트는 AI가 직접 예약하도록 유도하고, 보정은 안전망이다. 보정이 일어나면 로그에 남겨 프롬프트 개선 신호로 쓴다. 보정 예약은 `open_max_pending`에 걸리지 않는다(I6).
 
@@ -299,9 +299,334 @@ JS 이벤트 루프를 본뜬 단일 루프.
 
 ---
 
-## 8. 다음 단계
+## 8. DB 스키마
+
+v3 §3·§5를 기준으로 고친다. 시각은 모두 ISO 8601 + offset 문자열. `node:sqlite`, 외래 키 켬.
+
+### 8.1 `harness_state` (행 1개)
+
+| 컬럼 | 타입 | 의미 |
+|---|---|---|
+| `hold_reason` | NULL / `balance` / `daily_limit` / `blocked` | 보류 사유(v3 §9.6) |
+| `hold_until` | TEXT / NULL | 보류 재확인 시각. `blocked`는 NULL |
+| `hold_since` | TEXT / NULL | 보류 진입 시각. `blocked` 해제 판정("이후 온 사용자 메시지")에 쓴다 |
+| `last_plan_date` | TEXT / NULL | 마지막으로 완료한 계획일 |
+| `plan_attempts` / `plan_retry_at` | INTEGER / TEXT | 계획 실패 재시도(v3) |
+| `failure_count` | INTEGER | 턴 연속 실패 |
+| `turn_retry_at` | TEXT / NULL | 턴 실패 백오프. 이 시각 전에는 어떤 턴도 고르지 않는다 |
+| `daily_calls` / `daily_calls_date` | INTEGER / TEXT | 일일 호출 수(v3 지연 리셋) |
+
+v3에서 뺀 것: `current_flow_id`(열린 흐름은 `flows`에서 파생, I1은 인덱스로 강제), `random_due`·`last_roll_at`(랜덤 개시 제거).
+
+### 8.2 `goals`
+
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `policy_id` | TEXT | 방침 파일의 id. 파일에서 사라져도 유지 |
+| `policy_snapshot` | TEXT | 생성 시점 방침 본문 복사(§2.1). 하네스가 채운다 |
+| `title`, `done_criteria` | TEXT | |
+| `due_at` | TEXT / NULL | |
+| `progress` | TEXT | 진행 메모. 빈 문자열로 시작 |
+| `state` | TEXT | `active` / `done` / `failed` / `dropped` |
+| `end_reason` | TEXT / NULL | `goal_close`의 사유 |
+| `created_at`, `closed_at` | TEXT | |
+
+인덱스: `state`, `closed_at`.
+
+### 8.3 `flows`, `flow_goals`
+
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `opener` | TEXT | `ai` / `user` |
+| `opened_by_reservation_id` | INTEGER / NULL | 기록용. 예약 행은 개시 때 지워진다 |
+| `opened_intent` | TEXT / NULL | 개시 예약의 `intent` 복사(기록용) |
+| `turn_count` | INTEGER | |
+| `answered_upto_id` | INTEGER | 마지막 커밋 턴이 컨텍스트에 넣은 user 메시지의 최대 id |
+| `started_at`, `ended_at` | TEXT / NULL | `ended_at IS NULL` = 열림 |
+| `end_reason` | TEXT / NULL | `agent` / `blackout` / `stale` / `reset` |
+| `cleanup_status` | TEXT / NULL | `pending` / `done` / `failed` / `skipped` |
+| `cleanup_attempts`, `cleanup_next_at` | INTEGER, TEXT / NULL | 정리 재시도 |
+| `summary`, `compacted_until_id` | TEXT / NULL, INTEGER / NULL | 압축(v3 §13.2 그대로) |
+
+- I1: `CREATE UNIQUE INDEX flows_one_open ON flows((ended_at IS NULL)) WHERE ended_at IS NULL`.
+- `flow_goals(flow_id, goal_id, PRIMARY KEY(flow_id, goal_id))`: 그 흐름의 턴이 목표를 생성·갱신·종료했을 때 커밋 tx에서 기록.
+
+### 8.4 `reservations`, `reservation_goals`
+
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `kind` | TEXT | `continue` / `open` |
+| `at` | TEXT | 클램프·블랙아웃 규칙 적용 후 |
+| `state` | TEXT | `scheduled` / `fired` |
+| `flow_id` | INTEGER / NULL | `continue`만. 그 흐름 |
+| `intent` | TEXT / NULL | `open`만 |
+| `source` | TEXT | `turn` / `plan` / `harness`(I3 보정·복구 이어가기) |
+| `created_at` | TEXT | |
+
+- I2 일부: `CREATE UNIQUE INDEX one_continue ON reservations(flow_id) WHERE kind='continue'`.
+- `reservation_goals(reservation_id, goal_id)`, 예약 삭제 시 cascade.
+- I6 집계: `kind='open' AND source<>'harness'`(`scheduled`·`fired` 합산).
+
+### 8.5 `messages`
+
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| `id` | INTEGER PK | 도착(삽입) 순서 |
+| `flow_id` | INTEGER / NULL | NULL = 흐름 밖 |
+| `role` | TEXT | `user` / `assistant` |
+| `content`, `ts` | TEXT | |
+| `triage` | TEXT / NULL | user만. 흐름 안에서 받은 메시지는 NULL. 흐름 밖: `pending` → `ignored`, 흡수되면 `accepted`(`ignored`였던 것은 `ignored` 유지) |
+| `void_reason` | TEXT / NULL | `undelivered`(assistant, 전송 실패·낡음) / `reset`(미응답 user). 값이 있으면 컨텍스트·미응답 계산에서 뺀다 |
+| `sent_at` | TEXT / NULL | assistant만. outbox |
+| `tg_update_id` | INTEGER / NULL UNIQUE | 폴러 재수신 중복 방지 |
+
+- 흐름 밖 메시지는 `flow_id IS NULL`인 행이 전부다. 흐름을 여는 커밋 tx가 이것을 **전부**(`pending`과 `ignored` 모두) 새 흐름으로 옮긴다. 그래서 흐름 밖 메시지는 언제나 "직전 흐름 이후"의 것이고, 무시한 메시지가 다음 흐름 대화에 남는다(§2.5 합류 규칙의 구현).
+- v3의 `inbound_messages`, `ignored`/`moved`는 `flow_id` 변경으로 대체한다.
+- **미응답**(흐름 `f`): `flow_id=f AND role='user' AND void_reason IS NULL AND id > f.answered_upto_id`.
+
+### 8.6 `plans`, `llm_calls`
+
+- `plans(plan_date PK, body, created_at)`. 계획일당 1행.
+- `llm_calls`: v3 §5.7 그대로(`kind`: `turn` / `plan` / `cleanup` / `compact`).
+
+v3에서 뺀 테이블: `pool_items`, `inbound_messages`, `plan_items`.
+
+---
+
+## 9. 워커
+
+v3 §9를 기준으로 고친다. 핵심 차이는 **이벤트 큐가 없다**는 것이다. 루프는 깨어날 때마다 DB 상태에서 다음 작업을 고른다(`select`). v3의 큐 이벤트 다섯 개와 `finish()`의 순서 규칙이 `select` 하나로 합쳐진다.
+
+### 9.1 생산자
+
+| 생산자 | 하는 일 |
+|---|---|
+| 텔레그램 폴러 | `owner_chat_id` 확인 → `messages` 삽입(`tg_update_id` 중복이면 무시). 열린 흐름이 있으면 `flow_id`=그 흐름, 없으면 `flow_id=NULL, triage='pending'`. `wake()` |
+| 타이머 | 다음 기한에 발화. `UPDATE reservations SET state='fired' WHERE state='scheduled' AND at<=now`. `wake()` |
+| 리셋 CLI | 프로세스가 멈춘 상태에서만 DB를 고친다(v3 §15.3). 효과는 다음 부팅 때 보인다 |
+
+- DB 쓰기는 모두 동기 tx라 생산자 콜백은 루프의 tx 사이에만 끼어든다. 폴러가 읽는 "열린 흐름"은 그 순간의 확정 상태다.
+- 블랙아웃·계획일 경계는 별도 생산자 없이 다음 기한에 포함된다.
+
+**다음 기한** `next_deadline()` — 아래 중 최솟값. 루프가 잠들기 직전에 매번 다시 계산한다.
+
+| 항목 | 값 |
+|---|---|
+| 예약 | `MIN(at) WHERE state='scheduled'` |
+| 디바운스 | 디바운스 대상(열린 흐름의 미응답, 흐름이 없으면 `pending`)이 있으면 그중 `MAX(ts) + message_debounce_sec` |
+| 턴 백오프 | `turn_retry_at` |
+| 정리 재시도 | `MIN(cleanup_next_at) WHERE cleanup_status='pending'` |
+| 계획 | 계획이 밀렸으면 `MAX(now, plan_retry_at)`, 아니면 다음 블랙아웃 시작 |
+| 보류 | `hold_until` |
+
+### 9.2 루프
+
+```
+main():
+  boot()                                   # §9.8
+  loop:
+    while (job = select()) != null:
+      run(job)                             # 한 번에 하나. run 안의 await 동안 생산자는 기록만 한다
+    arm_timer(next_deadline())
+    await wake_or_timer()
+```
+
+`wake()`는 루프가 잠들어 있으면 깨우고, 일하는 중이면 아무것도 하지 않는다(작업이 끝나면 어차피 `select`로 돌아온다).
+
+### 9.3 작업 고르기
+
+```
+select():
+  if hold_reason:
+    if hold_reason=='blocked' and hold_since 이후 user 메시지 有: release(); resume()
+    elif hold_until <= now: try_release()               # v3 §9.6
+    return null
+  turn_ok = (turn_retry_at IS NULL or turn_retry_at <= now)
+
+  f = 열린 흐름
+  if f:                                                  # 흐름 = 게이트: 이 흐름 것만
+    c = f의 continue 예약
+    u = f의 미응답
+    settled = u 없음 or MAX(u.ts) + debounce <= now      # 디바운스 만료
+    if not turn_ok or not settled: return null           # 입력 중이면 이어가기도 기다린다(§4.1)
+    if c.state=='fired':
+      if 블랙아웃 and u 없음: return Close(f, 'blackout')
+      return Turn(continue, f)
+    if u 있음: return Turn(reply, f)
+    return null
+
+  # 흐름 없음: §4.2 순서
+  g = cleanup_status='pending'인 흐름 중 ended_at이 가장 이른 것
+  if g: return g.cleanup_next_at <= now ? Cleanup(g) : null    # 0번이 1~3을 막는다
+  if not turn_ok: return null
+  for r in open 예약 WHERE state='fired' ORDER BY at, id:     # 1번
+    if 블랙아웃: r.state='scheduled', r.at=블랙아웃 끝; continue
+    if r.goal_ids 있고 모두 종료: tx{ r 삭제; settle() }; continue    # 사전 검사
+    return Turn(open, r)
+  p = 흐름 밖 pending
+  if p 있음:                                                    # 2번
+    return MAX(p.ts) + debounce <= now ? Turn(user, p) : null
+  if 계획 밀림 and (plan_retry_at IS NULL or plan_retry_at <= now): return Plan()   # 3번
+  return null
+```
+
+- `select` 안의 쓰기(블랙아웃 재예약, 사전 검사 삭제)는 LLM을 부르지 않는 짧은 tx다.
+- 2번이 디바운스 대기 중이면 3번(계획)도 기다린다. 순서를 그대로 지키기 위해서다.
+
+### 9.4 턴
+
+`Turn(kind, …)`, `kind` ∈ `open`(AI 개시) / `user`(사용자 개시, 판정 겸) / `continue` / `reply`.
+
+```
+run Turn(kind, x):
+  if not gate(): return                            # 보류 진입. 아무것도 바꾸지 않음
+  # pre: 읽기만
+  ctx = assemble(kind, x)                          # §5.1 입력
+  upto = ctx에 넣은 user 메시지의 최대 id
+  out = await llm(ctx)                             # 도구 라운드. 도구 효과는 TurnTx에 모은다
+  if out 실패: fail_turn(); return
+
+  tx TurnTx:
+    if kind=='user' and out.respond==false:
+      x(pending 메시지) → triage='ignored'; failure_count=0; turn_retry_at=NULL
+      return                                       # 도구 효과는 버린다
+    if kind=='open' and out.messages==[] and out.next=='end':
+      x(open 예약) 삭제; settle(); 초기화(failure_count, turn_retry_at)
+      return                                       # 개입 취소. 흐름을 만들지 않는다
+    if kind in (open, user):
+      f = flows 삽입(opener, opened_by_*, answered_upto_id=0)
+      flow_id IS NULL인 메시지 전부 → flow_id=f (pending → accepted)   # I8
+      if kind=='open': x 삭제
+    도구 효과 반영(§9.5), flow_goals 기록
+    assistant 메시지 삽입(sent_at=NULL)
+    f.answered_upto_id = upto; f.turn_count++
+    failure_count=0; turn_retry_at=NULL
+    f의 continue 예약 삭제
+    if out.next=='continue': continue 예약 삽입(at=clamp(out.at), source='turn')
+    else: close_flow(f, 'agent')
+
+  send_outbox()                                    # §9.7
+  if f 열림: 압축 검사(v3 §13.2, gate 포함)
+```
+
+- 커밋 직전 스냅샷 재검증은 하지 않는다. 루프가 하나고 리셋은 오프라인이라 io 동안 바뀌는 것은 새 메시지 삽입과 `scheduled→fired`뿐이며, 둘 다 커밋과 충돌하지 않는다.
+- io 중 온 메시지: 흐름이 있으면 그 흐름의 미응답(`id > upto`)으로 남아 다음 턴 입력이 된다. 흐름을 여는 턴이면 아직 흐름 밖이었다가 커밋 tx가 흡수하고, 역시 `id > upto`라 미응답이 된다.
+- `continue` 출력의 `at`이 누락·무효면 v3 클램프로 메운다.
+
+**`fail_turn()`** — 파싱 1회 재시도 후에도 실패, 또는 예외.
+
+```
+tx: failure_count++; turn_retry_at = now + backoff(failure_count)
+    failure_count == failure_alert_after면 운영자 알림
+```
+
+트리거(예약 `fired`, 미응답, `pending`)는 그대로 남으므로 `turn_retry_at`이 지나면 `select`가 같은 작업을 다시 고른다. v3의 "백오프 self 예약 삽입"을 대신한다.
+
+### 9.5 도구 검증
+
+TurnTx는 도구 효과를 모으고, 이후 도구 라운드는 그 효과가 반영된 상태를 읽는다. 검증에 실패하면 거부 결과를 돌려주고 턴은 계속된다.
+
+| 도구 | 거부 조건 | 효과 |
+|---|---|---|
+| `goal_create` | 방침 id 없음, 활성 목표 ≥ `goal_max_active` | `active`, `policy_snapshot` 복사 |
+| `goal_update` | 활성 목표가 아님 | `progress`·`due_at` 갱신 |
+| `goal_close` | 활성 목표가 아님 | `state`, `end_reason`, `closed_at`. 걸린 예약은 건드리지 않는다(사전 검사가 지운다) |
+| `open_reserve` | `goal_ids`에 활성이 아닌 것, I6 상한 | `kind='open'`, `source='turn'`, 클램프·블랙아웃 |
+| `open_cancel` | `open` 예약이 아님 | 삭제(`harness` 출처도 가능) |
+
+### 9.6 흐름 연산
+
+**`close_flow(f, reason)`** — 흐름을 닫는 유일한 연산. 호출한 tx 안에서 실행한다.
+
+1. `f`의 continue 예약 삭제.
+2. `ended_at`, `end_reason`.
+3. `cleanup_status`: `reset`·정리 규칙 파일 없음·빈 흐름(메시지 0개)이면 `skipped`, 아니면 `pending`(`cleanup_next_at=now`, `cleanup_attempts=0`).
+4. 미응답 → `flow_id=NULL, triage='pending'`(I8). `reset`이면 옮기지 않고 `void_reason='reset'`.
+5. `reset`이 아니면 `settle()`.
+
+**`settle()`** — 흐름 없이 끝나는 tx의 마지막 단계. I3 보정: 활성 목표 중 걸린 `open` 예약이 없는 것마다 `source='harness'` 예약 삽입(`at`=`due_at` 또는 `now+orphan_goal_delay_sec`, 클램프·블랙아웃, `intent`="후속 확인"). 로그.
+
+**`Close(f, 'blackout')`** — `select`가 고른 작업. LLM 없이 `tx{ close_flow(f, 'blackout') }`.
+
+**`Cleanup(g)`**
+
+```
+if not gate(): return
+ctx = 대화(summary + 비압축 구간) + memory      # 입력·도구는 memory 설계 때 확정
+out = await llm(ctx)                              # 도구 효과는 MemoryTx에
+성공: tx{ MemoryTx 반영; cleanup_status='done'; cleanup_next_at=NULL }
+실패: tx{ cleanup_attempts++
+          if cleanup_attempts >= cleanup_max_attempts: 'failed', 운영자 알림
+          else cleanup_next_at = now + cleanup_backoff(cleanup_attempts) }
+```
+
+`cleanup_backoff(n) = min(cleanup_backoff_first_sec × 2^(n-1), cleanup_backoff_cap_sec)`. 턴 백오프보다 짧게 둔다. 그동안 다음 흐름이 막히기 때문이다.
+
+**`Plan()`**
+
+```
+if not gate(): return
+ctx = §5.2 입력
+out = await llm(ctx)
+성공: tx{ plans upsert(현재 계획일)
+          source='plan' AND state='scheduled'인 open 예약 삭제
+          out.reservations를 클램프·블랙아웃 적용 후 at 순으로, I6 상한까지 삽입(초과분 로그)
+          last_plan_date=현재 계획일; plan_attempts=0; plan_retry_at=NULL }
+실패: tx{ plan_attempts++; plan_retry_at = now + backoff(plan_attempts) }
+```
+
+계획 규칙 파일이 없으면 LLM 없이 `last_plan_date`만 갱신한다.
+
+### 9.7 전송
+
+`send_outbox()`: `sent_at IS NULL AND void_reason IS NULL`인 assistant 메시지를 `id` 순으로 보낸다. 분할·`send_interval_ms`·429·그 외 오류는 v3 §9.4 6단계. 403이면 남은 것 `void_reason='undelivered'`, 보류 `blocked` 진입(`hold_since=now`).
+
+### 9.8 부팅과 재개
+
+**`boot()`**: 설정 검증 → 단일 인스턴스 잠금 → 마이그레이션 → 보류 중이 아니면 `resume()`.
+
+**`resume()`** — 부팅과 보류 해제가 공유한다.
+
+1. outbox: 낡은 것(`ts < now - stale_after_sec`)은 `undelivered`, 나머지는 `send_outbox()`.
+2. 열린 흐름이 있으면:
+   - continue 예약이 낡았으면(`at < now - stale_after_sec`) `tx{ close_flow(f, 'stale') }`.
+   - continue 예약이 없으면 복구 예약 삽입(`at=now+min_lead`, `source='harness'`).
+3. 나머지는 `select`가 DB에서 다시 찾는다. 커밋 안 된 턴·정리·계획은 트리거가 그대로라 다시 돈다.
+
+v3의 큐 재구성(`reservation_due` 재투입, `debounce_expiry` 즉시 투입)은 필요 없다.
+
+### 9.9 v3 §9 대비
+
+| v3 | v4 |
+|---|---|
+| 이벤트 큐 5종 + 핸들러 + `finish()` | `select()` 하나. 상태에서 파생 |
+| 타이머 5개(`flow`/`system`/`cleanup`/`hold`/디바운스) | 다음 기한 1개 |
+| `current_flow_id` | `flows.ended_at IS NULL` + 유일 인덱스 |
+| 백오프 self 예약 | `turn_retry_at` |
+| 인바운드 테이블·인바운드 예약 | 흐름 밖 메시지 + 흡수 |
+| `run_turn` 7단계의 즉시 정리 시도 + `cleanup_timer` | `select` 0번 |
+| `handle_system`의 "흐름 중 블랙아웃 끝나면 실행" | 흐름이 닫힌 뒤에만 |
+
+### 9.10 설정 추가·변경
+
+v3 부록 A에서 `inbound_*`, `pool_*`, `plan_max_items`, `random_*`을 빼고 아래를 더한다. 값은 제안이며 §7 상한 기본값 결정 때 확정한다.
+
+| 키 | 제안값 | 의미 |
+|---|---|---|
+| `goal_max_active` | 8 | I6 |
+| `open_max_pending` | 6 | I6 |
+| `orphan_goal_delay_sec` | 3600 | I3 보정 예약 시각 |
+| `cleanup_max_attempts` | 5 | |
+| `cleanup_backoff_first_sec` / `cleanup_backoff_cap_sec` | 30 / 300 | |
+
+---
+
+## 10. 다음 단계
 
 1. 이 골격(개체·불변식·이벤트 반응·LLM 접점) 합의.
-2. DB 스키마, 워커 루프·흐름 연산 의사코드(v3 §9를 기반으로 개정).
+2. ~~DB 스키마, 워커 루프·흐름 연산 의사코드~~ → §8, §9.
 3. 시나리오 추적(물 마시기 동기 흐름, 9시 지시 → 1시 중간보고 → 3시 최종보고, 흐름 중 다른 목표의 마감 도래, 블랙아웃 중 사용자 보고, 무시 후 재언급).
 4. 테스트 목록.
