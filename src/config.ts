@@ -101,7 +101,11 @@ export function loadConfig(path: string): Config {
 }
 
 export function parseConfig(text: string): Config {
-  const result = configSchema.safeParse(withoutBlankValues(parseEnv(text)));
+  const entries = parseEnv(text);
+  if (entries.blackout !== undefined && entries.blackout.trim() === "") {
+    throw new ConfigError("blackout은 비울 수 없다. 블랙아웃이 없으면 계획일이 넘어가지 않는다");
+  }
+  const result = configSchema.safeParse(withoutBlankValues(entries));
   if (!result.success) {
     throw new ConfigError(`설정이 잘못됐다\n${z.prettifyError(result.error)}`);
   }
