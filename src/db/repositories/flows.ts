@@ -46,6 +46,14 @@ export class FlowRepository {
     return this.#db.prepare("SELECT * FROM flows WHERE ended_at IS NULL").get() as Flow | undefined;
   }
 
+  findLatestClosed(): Flow | undefined {
+    return this.#db
+      .prepare(
+        "SELECT * FROM flows WHERE ended_at IS NOT NULL ORDER BY ended_at DESC, id DESC LIMIT 1",
+      )
+      .get() as Flow | undefined;
+  }
+
   findOldestAwaitingCleanup(): Flow | undefined {
     return this.#db
       .prepare("SELECT * FROM flows WHERE cleanup_status = 'pending' ORDER BY ended_at, id LIMIT 1")

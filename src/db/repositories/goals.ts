@@ -67,6 +67,26 @@ export class GoalRepository {
       .all() as unknown as Goal[];
   }
 
+  findClosedOn(planDate: PlanDate): Goal[] {
+    return this.#db
+      .prepare(
+        "SELECT * FROM goals WHERE plan_date = ? AND state != 'active' ORDER BY closed_at, id",
+      )
+      .all(planDate) as unknown as Goal[];
+  }
+
+  /** 정리가 볼 목표: 흐름의 계획일 목표 전체와 그 흐름이 다룬 목표. */
+  findForCleanup(flowId: number, planDate: PlanDate): (Goal & { is_in_flow: number })[] {
+    return this.#db
+      .prepare(
+        `SELECT goals.*, flow_goals.flow_id IS NOT NULL AS is_in_flow FROM goals
+         LEFT JOIN flow_goals ON flow_goals.goal_id = goals.id AND flow_goals.flow_id = :flowId
+         WHERE goals.plan_date = :planDate OR flow_goals.flow_id IS NOT NULL
+         ORDER BY goals.id`,
+      )
+      .all({ flowId, planDate }) as unknown as (Goal & { is_in_flow: number })[];
+  }
+
   maxId(): number {
     const row = this.#db.prepare("SELECT MAX(id) AS id FROM goals").get() as { id: number | null };
     return row.id ?? 0;

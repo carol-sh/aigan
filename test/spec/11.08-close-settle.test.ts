@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Gate } from "../fakes/gate.ts";
-import { ScriptedLlm, type ScriptedTurn, type TurnScript } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm, type ScriptedTurn, type TurnScript } from "../fakes/scripted-llm.ts";
 import { type StartOptions, type TestApp, startApp } from "../rig.ts";
 
 /** 사용자가 연 흐름의 첫 턴이 각본대로 목표를 만들고 끝낸다. 되묻기 각본은 따로 준다. */
@@ -19,8 +19,8 @@ async function startWithEndingTurn(
 }
 
 function createGoalAndEnd(goal: { title: string; dueAt?: string } = { title: "물" }) {
-  return (turn: ScriptedTurn) => {
-    turn.createGoal(goal);
+  return async (turn: ScriptedTurn) => {
+    await turn.createGoal(goal);
     return turn.end("이따 봐");
   };
 }
@@ -33,12 +33,12 @@ function harnessReservations(app: TestApp) {
 
 test("62, 62c: 끝내는 턴이 다음 확인 없는 목표를 남기면 한 번 되묻고, 두 번째 출력이 예약하거나 닫으면 그대로 커밋한다 (L8)", async (t) => {
   const answers: Record<string, TurnScript> = {
-    open_reserve: (turn) => {
-      turn.reserveOpening({ at: "15:00", goalIds: [1] });
+    open_reserve: async (turn) => {
+      await turn.reserveOpening({ at: "15:00", goalIds: [1] });
       return turn.end("3시에 볼게");
     },
-    goal_close: (turn) => {
-      turn.use("goal_close", { goal_id: 1, result: "dropped", reason: "오늘은 됐다" });
+    goal_close: async (turn) => {
+      await turn.use("goal_close", { goal_id: 1, result: "dropped", reason: "오늘은 됐다" });
       return turn.end("그건 빼자");
     },
   };
@@ -69,8 +69,8 @@ test("62a: 되묻기에도 빠뜨리면 커밋한 뒤 orphan_goal_delay_sec 뒤�
 });
 
 test("62b: 이어가는 출력은 다음 확인 없는 목표가 있어도 되묻지 않는다", async (t) => {
-  const app = await startWithEndingTurn(t, (turn) => {
-    turn.createGoal({ title: "물" });
+  const app = await startWithEndingTurn(t, async (turn) => {
+    await turn.createGoal({ title: "물" });
     return turn.say("마시고 와", { continueAfter: { minutes: 30 } });
   });
 
@@ -80,8 +80,8 @@ test("62b: 이어가는 출력은 다음 확인 없는 목표가 있어도 되�
 
 test("62d: 첫 출력이 만든 목표를 되묻기 출력이 예약하면 두 효과가 모두 커밋된다", async (t) => {
   const app = await startWithEndingTurn(t, createGoalAndEnd(), {
-    reconsider: (turn) => {
-      turn.reserveOpening({ at: "15:00", intent: "물 확인", goalIds: [1] });
+    reconsider: async (turn) => {
+      await turn.reserveOpening({ at: "15:00", intent: "물 확인", goalIds: [1] });
       return turn.end("3시에 확인할게");
     },
   });
@@ -98,9 +98,7 @@ test("62d: 첫 출력이 만든 목표를 되묻기 출력이 예약하면 두 �
 
 test("62e: 되묻기 호출이 실패하면 첫 출력으로 커밋하고 후속 확인을 잡으며 출력 실패로 세지 않는다", async (t) => {
   const app = await startWithEndingTurn(t, createGoalAndEnd(), {
-    reconsider: () => {
-      throw new Error("파싱 실패");
-    },
+    reconsider: (turn) => turn.malformed(),
   });
 
   assert.deepEqual(app.telegram.sent, ["이따 봐"]);
@@ -119,8 +117,8 @@ test("63: 마감이 미래면 후속 확인은 마감 시각이다", async (t) =
 
 test("64: 마감이 지났으면 후속 확인은 now + orphan_goal_delay_sec다 (L7)", async (t) => {
   const llm = new ScriptedLlm().onTurn(
-    (turn) => {
-      turn.createGoal({ title: "보고서", dueAt: "10:30" });
+    async (turn) => {
+      await turn.createGoal({ title: "보고서", dueAt: "10:30" });
       return turn.say("10시 반까지", { continueAfter: { hours: 1 } });
     },
     (turn) => turn.end("알았어"),
@@ -156,8 +154,8 @@ test("65a: 그날 끝까지 시간이 거의 없으면 되묻지도 보정하지
 test("66: 후속 확인 예약은 여러 개여도 개시 예약 상한에 걸리지 않는다", async (t) => {
   const app = await startWithEndingTurn(
     t,
-    (turn) => {
-      for (const title of ["물", "책", "산책"]) turn.createGoal({ title });
+    async (turn) => {
+      for (const title of ["물", "책", "산책"]) await turn.createGoal({ title });
       return turn.end("이따 봐");
     },
     { config: { open_max_pending: "1" } },

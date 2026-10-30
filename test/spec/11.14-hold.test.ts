@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { createTwoGoalsCheckedAt } from "../fakes/scenarios.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
@@ -41,8 +41,8 @@ test("109: 일일 상한 보류는 로컬 자정에 풀리고 재개 뒤 밀린 
 });
 
 test("111: 보류 중에도 블랙아웃 시작에 흐름을 닫고, 정리·날 넘김·계획은 해제 뒤에 돈다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((turn) => {
-    turn.createGoal({ title: "산책" });
+  const llm = new ScriptedLlm().onTurn(async (turn) => {
+    await turn.createGoal({ title: "산책" });
     return turn.say("응", { continueAfter: { hours: 2 } });
   });
   const app = await startApp(t, {

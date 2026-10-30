@@ -8,6 +8,12 @@ export interface Tool<Args> {
   run(args: Args): ToolResult;
 }
 
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  args: z.ZodType;
+}
+
 export function defineTool<Args>(tool: Tool<Args>): Tool<unknown> {
   return tool as Tool<unknown>;
 }
@@ -26,6 +32,14 @@ export class ToolBox {
 
   get names(): string[] {
     return Object.keys(this.#tools);
+  }
+
+  get definitions(): ToolDefinition[] {
+    return Object.entries(this.#tools).map(([name, tool]) => ({
+      name,
+      description: tool.description,
+      args: tool.args,
+    }));
   }
 
   use(name: string, rawArgs: unknown): ToolResult {

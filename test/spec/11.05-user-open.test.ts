@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Gate } from "../fakes/gate.ts";
-import { ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { startApp } from "../rig.ts";
 
 test("33: 말한 판정 턴은 사용자가 연 흐름을 만들고 흐름 밖 메시지를 모두 옮긴다", async (t) => {
@@ -32,7 +32,7 @@ test("34, 37: 말 없는 판정 턴은 이어가든 끝내든 본 메시지만 �
     await t.test(silentOutput, async (t) => {
       const gate = new Gate();
       const llm = new ScriptedLlm().onTurn(async (turn) => {
-        turn.createGoal({ title: "산책" });
+        await turn.createGoal({ title: "산책" });
         await gate.wait();
         return turn[silentOutput]();
       });

@@ -7,7 +7,7 @@ import type { Update } from "grammy/types";
 import { type Harness, boot } from "../src/worker/boot.ts";
 import { type ConfigOverrides, testConfigText } from "./fakes/config.ts";
 import { FakeClock, flushAsyncWork } from "./fakes/clock.ts";
-import { ScriptedLlm, parseLocalTime } from "./fakes/llm-tasks.ts";
+import { ScriptedLlm, parseLocalTime } from "./fakes/scripted-llm.ts";
 import { MemoryLogger } from "./fakes/logger.ts";
 import { FakeTelegram } from "./fakes/telegram.ts";
 
@@ -23,7 +23,7 @@ export interface StartOptions {
   preparePrompts?: (promptsDir: string) => void;
 }
 
-/** 임시 DATA_DIR로 실제 부팅을 하고 루프를 돌린다. 바깥 경계(시계·텔레그램·LLM 작업)만 가짜다. */
+/** 임시 DATA_DIR로 실제 부팅을 하고 루프를 돌린다. 바깥 경계(시계·텔레그램·LLM 클라이언트·계획)만 가짜다. */
 export async function startApp(t: TestContext, options: StartOptions = {}): Promise<TestApp> {
   const dataDir = mkdtempSync(join(tmpdir(), "aigan-"));
   writeFileSync(join(dataDir, "config"), testConfigText({ timezone: TIMEZONE, ...options.config }));
@@ -65,8 +65,10 @@ export class TestApp {
       clock: this.clock,
       telegram: this.telegram,
       logger: this.logger,
-      createDeciders: (ctx) => this.llm.decidersFor(ctx),
+      chat: this.llm,
+      runPlan: (ctx, task) => this.llm.runPlan(ctx, task),
     });
+    this.llm.attach(this.#harness.ctx);
     this.#harness.start();
     await flushAsyncWork();
   }
@@ -143,6 +145,9 @@ export class TestApp {
     rmSync(this.dataDir, { recursive: true, force: true });
     if (this.logger.errors.length > 0) {
       throw new Error(`앱이 오류를 남겼다: ${this.logger.errors.map(String).join("; ")}`);
+    }
+    if (this.llm.problems.length > 0) {
+      throw new Error(`각본 모델에 문제가 있었다: ${this.llm.problems.join("; ")}`);
     }
   }
 

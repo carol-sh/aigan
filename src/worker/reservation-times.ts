@@ -73,12 +73,17 @@ export function fitContinueTime(
 }
 
 const LOCAL_TIME_FORMAT = "yyyy-MM-dd HH:mm";
+const LOCAL_TIME_WITH_SECONDS_FORMAT = "yyyy-MM-dd HH:mm:ss";
 
 export function formatLocalTime(time: DateTime, timezone: string): string {
   return time.setZone(timezone).toFormat(LOCAL_TIME_FORMAT);
 }
 
+/** `YYYY-MM-DD HH:mm`. 초를 붙인 `YYYY-MM-DD HH:mm:ss`도 받는다. */
 export function parseLocalTime(text: string, timezone: string): DateTime | undefined {
-  const time = DateTime.fromFormat(text, LOCAL_TIME_FORMAT, { zone: timezone });
-  return time.isValid ? time.toUTC() : undefined;
+  for (const format of [LOCAL_TIME_FORMAT, LOCAL_TIME_WITH_SECONDS_FORMAT]) {
+    const time = DateTime.fromFormat(text, format, { zone: timezone });
+    if (time.isValid) return time.toUTC();
+  }
+  return undefined;
 }

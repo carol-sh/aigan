@@ -65,13 +65,26 @@ export class MessageRepository {
     return Number(result.lastInsertRowid);
   }
 
-  latestUserMessageId(): number {
-    const row = this.#db
-      .prepare("SELECT MAX(id) AS id FROM messages WHERE role = 'user'")
-      .get() as {
-      id: number | null;
-    };
-    return row.id ?? 0;
+  /** 입력에 보여 줄 흐름 대화. 지운 것(`busy`, `trimmed`, `undelivered`)은 뺀다. */
+  findShownInFlow(flowId: number): Message[] {
+    return this.#db
+      .prepare("SELECT * FROM messages WHERE flow_id = ? AND void_reason IS NULL ORDER BY id")
+      .all(flowId) as unknown as Message[];
+  }
+
+  findLastShownInFlow(flowId: number, limit: number): Message[] {
+    const latestFirst = this.#db
+      .prepare(
+        "SELECT * FROM messages WHERE flow_id = ? AND void_reason IS NULL ORDER BY id DESC LIMIT ?",
+      )
+      .all(flowId, limit) as unknown as Message[];
+    return latestFirst.reverse();
+  }
+
+  findShownOutsideFlow(): Message[] {
+    return this.#db
+      .prepare("SELECT * FROM messages WHERE flow_id IS NULL AND void_reason IS NULL ORDER BY id")
+      .all() as unknown as Message[];
   }
 
   latestUnansweredAt(flow: Flow): DateTime | undefined {

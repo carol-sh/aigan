@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "../../src/db/repositories/messages.ts";
-import { ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
 function userMessages(app: TestApp): Pick<Message, "content" | "flow_id" | "triage">[] {

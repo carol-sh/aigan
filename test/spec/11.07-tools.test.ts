@@ -2,17 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import type { ToolResult } from "../../src/worker/tools/tool-box.ts";
-import { ScriptedLlm, type ScriptedTurn } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm, type ScriptedTurn } from "../fakes/scripted-llm.ts";
 import { type StartOptions, type TestApp, startApp } from "../rig.ts";
 
 /** 사용자가 연 첫 턴에서 각본대로 도구를 쓰고 한 줄 말한 뒤 1시간 뒤로 이어간다. */
 async function startWithUserTurn(
   t: TestContext,
-  useTools: (turn: ScriptedTurn) => void,
+  useTools: (turn: ScriptedTurn) => unknown,
   options: StartOptions = {},
 ): Promise<TestApp> {
-  const llm = (options.llm ?? new ScriptedLlm()).onTurn((turn) => {
-    useTools(turn);
+  const llm = (options.llm ?? new ScriptedLlm()).onTurn(async (turn) => {
+    await useTools(turn);
     return turn.say("응", { continueAfter: { hours: 1 } });
   });
   const app = await startApp(t, { ...options, llm });
@@ -34,9 +34,9 @@ test("49: 활성 목표가 goal_max_active개면 goal_create는 거부되고 턴
   const results: ToolResult[] = [];
   const app = await startWithUserTurn(
     t,
-    (turn) => {
+    async (turn) => {
       for (const title of ["물", "책", "산책"])
-        results.push(turn.use("goal_create", goalArgs(title)));
+        results.push(await turn.use("goal_create", goalArgs(title)));
     },
     { config: { goal_max_active: "2" } },
   );
@@ -52,10 +52,10 @@ test("49: 활성 목표가 goal_max_active개면 goal_create는 거부되고 턴
 
 test("50, 50a: 없는 방침 id는 goal_create와 job_read 모두 거부한다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => {
-    results.push(turn.use("goal_create", goalArgs("물", { job_id: "nope" })));
-    results.push(turn.use("job_read", { job_id: "nope" }));
-    results.push(turn.use("job_read", { job_id: "sample" }));
+  await startWithUserTurn(t, async (turn) => {
+    results.push(await turn.use("goal_create", goalArgs("물", { job_id: "nope" })));
+    results.push(await turn.use("job_read", { job_id: "nope" }));
+    results.push(await turn.use("job_read", { job_id: "sample" }));
   });
 
   assertRejected(results[0], /nope/);
@@ -64,7 +64,10 @@ test("50, 50a: 없는 방침 id는 goal_create와 job_read 모두 거부한다",
 });
 
 test("51: goal_create는 방침 본문을 job_snapshot으로 복사하고 흐름에 목표를 붙인다", async (t) => {
-  const app = await startWithUserTurn(t, (turn) => turn.createGoal({ title: "물 2리터" }));
+  const app = await startWithUserTurn(
+    t,
+    async (turn) => await turn.createGoal({ title: "물 2리터" }),
+  );
 
   const job = app.harness.ctx.prompts.jobPolicies.find(({ id }) => id === "sample");
   assert.deepEqual(app.row("SELECT job_id, job_snapshot, plan_date, state FROM goals"), {
@@ -80,22 +83,24 @@ test("51: goal_create는 방침 본문을 job_snapshot으로 복사하고 흐름
 
 test("52: 활성이 아닌 목표의 goal_update·goal_close는 거부한다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => {
-    const goalId = turn.createGoal({ title: "물" });
-    turn.use("goal_close", { goal_id: goalId, result: "done", reason: "다 마심" });
-    results.push(turn.use("goal_update", { goal_id: goalId, progress: "반" }));
-    results.push(turn.use("goal_close", { goal_id: goalId, result: "failed", reason: "다시" }));
-    results.push(turn.use("goal_update", { goal_id: 99, progress: "반" }));
+  await startWithUserTurn(t, async (turn) => {
+    const goalId = await turn.createGoal({ title: "물" });
+    await turn.use("goal_close", { goal_id: goalId, result: "done", reason: "다 마심" });
+    results.push(await turn.use("goal_update", { goal_id: goalId, progress: "반" }));
+    results.push(
+      await turn.use("goal_close", { goal_id: goalId, result: "failed", reason: "다시" }),
+    );
+    results.push(await turn.use("goal_update", { goal_id: 99, progress: "반" }));
   });
 
   for (const result of results) assertRejected(result, /활성 목표가 아니다/);
 });
 
 test("53: goal_close는 걸린 예약을 남기고, 발화 때 사전 검사가 턴 없이 지운다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((turn) => {
-    const goalId = turn.createGoal({ title: "물" });
-    turn.reserveOpening({ at: "10:30", goalIds: [goalId] });
-    turn.use("goal_close", { goal_id: goalId, result: "dropped", reason: "필요 없어짐" });
+  const llm = new ScriptedLlm().onTurn(async (turn) => {
+    const goalId = await turn.createGoal({ title: "물" });
+    await turn.reserveOpening({ at: "10:30", goalIds: [goalId] });
+    await turn.use("goal_close", { goal_id: goalId, result: "dropped", reason: "필요 없어짐" });
     return turn.end("그럼 됐어");
   });
   const app = await startApp(t, { llm });
@@ -111,14 +116,18 @@ test("53: goal_close는 걸린 예약을 남기고, 발화 때 사전 검사가 
 
 test("54: open_reserve의 goal_ids에 활성이 아닌 목표가 있으면 거부한다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => {
-    const goalId = turn.createGoal({ title: "물" });
-    turn.use("goal_close", { goal_id: goalId, result: "done", reason: "다 마심" });
+  await startWithUserTurn(t, async (turn) => {
+    const goalId = await turn.createGoal({ title: "물" });
+    await turn.use("goal_close", { goal_id: goalId, result: "done", reason: "다 마심" });
     results.push(
-      turn.use("open_reserve", { at: turn.time("15:00"), intent: "확인", goal_ids: [goalId] }),
+      await turn.use("open_reserve", {
+        at: turn.time("15:00"),
+        intent: "확인",
+        goal_ids: [goalId],
+      }),
     );
     results.push(
-      turn.use("open_reserve", { at: turn.time("15:00"), intent: "확인", goal_ids: [42] }),
+      await turn.use("open_reserve", { at: turn.time("15:00"), intent: "확인", goal_ids: [42] }),
     );
   });
 
@@ -131,10 +140,10 @@ test("55: open_reserve는 scheduled와 fired 개시 예약을 상한에 넣는�
   const llm = new ScriptedLlm()
     .onPlan((plan) => plan.finishPlan({ openings: [{ at: "10:30" }, { at: "15:00" }] }))
     .onTurn(
-      (turn) => turn.say("응", { continueAfter: { hours: 2 } }),
-      (turn) => {
-        results.push(turn.use("open_reserve", { at: turn.time("16:00"), intent: "하나" }));
-        results.push(turn.use("open_reserve", { at: turn.time("17:00"), intent: "둘" }));
+      async (turn) => turn.say("응", { continueAfter: { hours: 2 } }),
+      async (turn) => {
+        results.push(await turn.use("open_reserve", { at: turn.time("16:00"), intent: "하나" }));
+        results.push(await turn.use("open_reserve", { at: turn.time("17:00"), intent: "둘" }));
         return turn.say("알았어", { continueAfter: { hours: 1 } });
       },
     );
@@ -151,14 +160,14 @@ test("55: open_reserve는 scheduled와 fired 개시 예약을 상한에 넣는�
 test("55: 하네스 후속 확인 예약은 open_reserve 상한에 넣지 않는다", async (t) => {
   const results: ToolResult[] = [];
   const llm = new ScriptedLlm().onTurn(
-    (turn) => {
-      turn.createGoal({ title: "물" });
-      turn.createGoal({ title: "책" });
+    async (turn) => {
+      await turn.createGoal({ title: "물" });
+      await turn.createGoal({ title: "책" });
       return turn.end("이따 봐");
     },
-    (turn) => {
-      results.push(turn.use("open_reserve", { at: turn.time("16:00"), intent: "하나" }));
-      results.push(turn.use("open_reserve", { at: turn.time("17:00"), intent: "둘" }));
+    async (turn) => {
+      results.push(await turn.use("open_reserve", { at: turn.time("16:00"), intent: "하나" }));
+      results.push(await turn.use("open_reserve", { at: turn.time("17:00"), intent: "둘" }));
       return turn.say("알았어", { continueAfter: { hours: 1 } });
     },
   );
@@ -177,10 +186,10 @@ test("56, 58c: AI 개시 턴의 자기 예약은 상한 집계에서 빠지고 �
   const results: ToolResult[] = [];
   const llm = new ScriptedLlm()
     .onPlan((plan) => plan.finishPlan({ openings: [{ at: "10:30" }] }))
-    .onTurn((turn) => {
-      results.push(turn.use("open_reserve", { at: turn.time("15:00"), intent: "다음" }));
-      results.push(turn.use("open_cancel", { reservation_id: 1 }));
-      results.push(turn.use("open_update", { reservation_id: 1, intent: "바꿈" }));
+    .onTurn(async (turn) => {
+      results.push(await turn.use("open_reserve", { at: turn.time("15:00"), intent: "다음" }));
+      results.push(await turn.use("open_cancel", { reservation_id: 1 }));
+      results.push(await turn.use("open_update", { reservation_id: 1, intent: "바꿈" }));
       return turn.say("산책 가자", { continueAfter: { hours: 1 } });
     });
   await startApp(t, { llm, config: { open_max_pending: "1" } }).then((app) =>
@@ -194,9 +203,9 @@ test("56, 58c: AI 개시 턴의 자기 예약은 상한 집계에서 빠지고 �
 
 test("57: 그날 끝 이후(다음 블랙아웃 안 포함)의 open_reserve는 이유에 그날 끝 시각을 담아 거부한다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => {
+  await startWithUserTurn(t, async (turn) => {
     for (const at of ["2026-10-31 00:00", "2026-10-31 03:00", "2026-10-31 09:00"]) {
-      results.push(turn.use("open_reserve", { at, intent: "내일" }));
+      results.push(await turn.use("open_reserve", { at, intent: "내일" }));
     }
   });
 
@@ -205,8 +214,8 @@ test("57: 그날 끝 이후(다음 블랙아웃 안 포함)의 open_reserve는 �
 
 test("57a: 지난 시각의 open_reserve는 now + min_lead로 당긴다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => {
-    results.push(turn.use("open_reserve", { at: turn.time("09:00"), intent: "아까" }));
+  await startWithUserTurn(t, async (turn) => {
+    results.push(await turn.use("open_reserve", { at: turn.time("09:00"), intent: "아까" }));
   });
 
   assert.deepEqual(results[0], { ok: true, reservation_id: 1, at: "2026-10-30 10:01" });
@@ -214,10 +223,10 @@ test("57a: 지난 시각의 open_reserve는 now + min_lead로 당긴다", async 
 
 test("57b: 그날 끝 이후의 마감은 goal_create·goal_update 모두 거부한다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => {
-    results.push(turn.use("goal_create", goalArgs("물", { due_at: "2026-10-31 09:00" })));
-    const goalId = turn.createGoal({ title: "책", dueAt: "18:00" });
-    results.push(turn.use("goal_update", { goal_id: goalId, due_at: "2026-10-31 00:00" }));
+  await startWithUserTurn(t, async (turn) => {
+    results.push(await turn.use("goal_create", goalArgs("물", { due_at: "2026-10-31 09:00" })));
+    const goalId = await turn.createGoal({ title: "책", dueAt: "18:00" });
+    results.push(await turn.use("goal_update", { goal_id: goalId, due_at: "2026-10-31 00:00" }));
   });
 
   for (const result of results) assertRejected(result, /깨어 있는 구간/);
@@ -227,7 +236,8 @@ test("57d: 블랙아웃 안의 마감은 깨어 있는 구간을 이유에 담�
   const results: ToolResult[] = [];
   await startWithUserTurn(
     t,
-    (turn) => results.push(turn.use("goal_create", goalArgs("물", { due_at: turn.time("23:30") }))),
+    async (turn) =>
+      results.push(await turn.use("goal_create", goalArgs("물", { due_at: turn.time("23:30") }))),
     { at: "2026-10-30 22:30", config: { blackout: "23:00-07:00" } },
   );
 
@@ -238,7 +248,8 @@ test("57c: 그날 끝까지 min_lead도 남지 않으면 open_reserve는 거부�
   const results: ToolResult[] = [];
   await startWithUserTurn(
     t,
-    (turn) => results.push(turn.use("open_reserve", { at: turn.time("23:59"), intent: "막차" })),
+    async (turn) =>
+      results.push(await turn.use("open_reserve", { at: turn.time("23:59"), intent: "막차" })),
     { at: "2026-10-30 23:59" },
   );
 
@@ -248,12 +259,12 @@ test("57c: 그날 끝까지 min_lead도 남지 않으면 open_reserve는 거부�
 test("58: 하네스 후속 확인 예약도 open_cancel로 취소할 수 있다", async (t) => {
   const results: ToolResult[] = [];
   const llm = new ScriptedLlm().onTurn(
-    (turn) => {
-      turn.createGoal({ title: "물" });
+    async (turn) => {
+      await turn.createGoal({ title: "물" });
       return turn.end("이따 봐");
     },
-    (turn) => {
-      results.push(turn.use("open_cancel", { reservation_id: 1 }));
+    async (turn) => {
+      results.push(await turn.use("open_cancel", { reservation_id: 1 }));
       return turn.say("확인은 지금 하자", { continueAfter: { hours: 1 } });
     },
   );
@@ -270,9 +281,9 @@ test("58: 하네스 후속 확인 예약도 open_cancel로 취소할 수 있다"
 test("58b: 계획 예약에 open_update로 새 목표를 붙이고 끝내면 되묻지 않고 상한 집계도 그대로다", async (t) => {
   const llm = new ScriptedLlm()
     .onPlan((plan) => plan.finishPlan({ openings: [{ at: "15:00", intent: "오후 확인" }] }))
-    .onTurn((turn) => {
-      const goalId = turn.createGoal({ title: "물" });
-      turn.use("open_update", { reservation_id: 1, goal_ids: [goalId] });
+    .onTurn(async (turn) => {
+      const goalId = await turn.createGoal({ title: "물" });
+      await turn.use("open_update", { reservation_id: 1, goal_ids: [goalId] });
       return turn.end("3시에 볼게");
     });
   const app = await startApp(t, { llm, config: { open_max_pending: "1" } });
@@ -291,11 +302,11 @@ test("58c: 없는 예약, 이어가기 예약, 바꿀 필드 없는 open_update�
   const llm = new ScriptedLlm()
     .onPlan((plan) => plan.finishPlan({ openings: [{ at: "15:00" }] }))
     .onTurn(
-      (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
-      (turn) => {
-        results.push(turn.use("open_update", { reservation_id: 99, intent: "x" }));
-        results.push(turn.use("open_update", { reservation_id: 2, intent: "x" }));
-        results.push(turn.use("open_update", { reservation_id: 1 }));
+      async (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
+      async (turn) => {
+        results.push(await turn.use("open_update", { reservation_id: 99, intent: "x" }));
+        results.push(await turn.use("open_update", { reservation_id: 2, intent: "x" }));
+        results.push(await turn.use("open_update", { reservation_id: 1 }));
         return turn.say("응", { continueAfter: { hours: 1 } });
       },
     );
@@ -315,9 +326,9 @@ test("58d: open_update의 goal_ids에 활성이 아닌 목표가 있거나 at이
   const results: ToolResult[] = [];
   await startWithUserTurn(
     t,
-    (turn) => {
-      results.push(turn.use("open_update", { reservation_id: 1, goal_ids: [7] }));
-      results.push(turn.use("open_update", { reservation_id: 1, at: "2026-10-31 09:00" }));
+    async (turn) => {
+      results.push(await turn.use("open_update", { reservation_id: 1, goal_ids: [7] }));
+      results.push(await turn.use("open_update", { reservation_id: 1, at: "2026-10-31 09:00" }));
     },
     { llm: new ScriptedLlm().onPlan((plan) => plan.finishPlan({ openings: [{ at: "15:00" }] })) },
   );
@@ -330,9 +341,9 @@ test("58e: 흐름 중 밀린 개시 예약의 at을 바꾸면 scheduled로 돌�
   const llm = new ScriptedLlm()
     .onPlan((plan) => plan.finishPlan({ openings: [{ at: "10:30" }] }))
     .onTurn(
-      (turn) => turn.say("응", { continueAfter: { hours: 2 } }),
-      (turn) => {
-        turn.use("open_update", { reservation_id: 1, at: turn.time("11:00") });
+      async (turn) => turn.say("응", { continueAfter: { hours: 2 } }),
+      async (turn) => {
+        await turn.use("open_update", { reservation_id: 1, at: turn.time("11:00") });
         return turn.say("산책은 11시에", { continueAfter: { hours: 2 } });
       },
     );
@@ -355,10 +366,10 @@ test("58f: open_update가 goal_ids만 바꾸면 밀린 예약의 state와 at은 
   const llm = new ScriptedLlm()
     .onPlan((plan) => plan.finishPlan({ openings: [{ at: "10:30" }] }))
     .onTurn(
-      (turn) => turn.say("응", { continueAfter: { hours: 2 } }),
-      (turn) => {
-        const goalId = turn.createGoal({ title: "산책" });
-        turn.use("open_update", { reservation_id: 1, goal_ids: [goalId] });
+      async (turn) => turn.say("응", { continueAfter: { hours: 2 } }),
+      async (turn) => {
+        const goalId = await turn.createGoal({ title: "산책" });
+        await turn.use("open_update", { reservation_id: 1, goal_ids: [goalId] });
         return turn.say("산책 목표로 할게", { continueAfter: { hours: 2 } });
       },
     );
@@ -376,9 +387,9 @@ test("58f: open_update가 goal_ids만 바꾸면 밀린 예약의 state와 at은 
 
 test("59, 61c: 목록 밖 도구와 정리 전용 기억 쓰기 도구는 턴에서 거부한다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => {
+  await startWithUserTurn(t, async (turn) => {
     for (const name of ["web_search", "state_write", "memory_write", "memory_delete"]) {
-      results.push(turn.use(name, { content: "x", title: "x" }));
+      results.push(await turn.use(name, { content: "x", title: "x" }));
     }
   });
 
@@ -387,13 +398,15 @@ test("59, 61c: 목록 밖 도구와 정리 전용 기억 쓰기 도구는 턴에
 
 test("60: 도구 효과는 다음 라운드가 읽는 상태에 바로 반영된다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => {
-    const goalId = turn.createGoal({ title: "물" });
-    results.push(turn.use("goal_update", { goal_id: goalId, progress: "1리터" }));
-    const reservationId = turn.reserveOpening({ at: "15:00", goalIds: [goalId] });
-    results.push(turn.use("open_cancel", { reservation_id: reservationId }));
-    results.push(turn.use("goal_close", { goal_id: goalId, result: "done", reason: "다 마심" }));
-    results.push(turn.use("goal_update", { goal_id: goalId, progress: "2리터" }));
+  await startWithUserTurn(t, async (turn) => {
+    const goalId = await turn.createGoal({ title: "물" });
+    results.push(await turn.use("goal_update", { goal_id: goalId, progress: "1리터" }));
+    const reservationId = await turn.reserveOpening({ at: "15:00", goalIds: [goalId] });
+    results.push(await turn.use("open_cancel", { reservation_id: reservationId }));
+    results.push(
+      await turn.use("goal_close", { goal_id: goalId, result: "done", reason: "다 마심" }),
+    );
+    results.push(await turn.use("goal_update", { goal_id: goalId, progress: "2리터" }));
   });
 
   assert.deepEqual(results.slice(0, 3), [{ ok: true }, { ok: true }, { ok: true }]);
@@ -402,7 +415,9 @@ test("60: 도구 효과는 다음 라운드가 읽는 상태에 바로 반영된
 
 test("61b: 없는 기억 칸의 memory_read는 거부한다", async (t) => {
   const results: ToolResult[] = [];
-  await startWithUserTurn(t, (turn) => results.push(turn.use("memory_read", { title: "약점" })));
+  await startWithUserTurn(t, async (turn) =>
+    results.push(await turn.use("memory_read", { title: "약점" })),
+  );
 
   assertRejected(results[0], /약점/);
 });

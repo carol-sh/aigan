@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Gate } from "../fakes/gate.ts";
-import { ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { createTwoGoalsCheckedAt } from "../fakes/scenarios.ts";
 import { startApp } from "../rig.ts";
 
@@ -78,7 +78,7 @@ test("75b: 턴의 io가 계획일 경계를 넘겨도 만든 목표는 턴이 �
   const gate = new Gate();
   const llm = new ScriptedLlm().onTurn(async (turn) => {
     await gate.wait();
-    turn.createGoal({ title: "물 한 잔" });
+    await turn.createGoal({ title: "물 한 잔" });
     return turn.say("물 마시고 자", { continueAfter: { hours: 1 } });
   });
   const app = await startApp(t, { at: "2026-10-30 23:59", llm });

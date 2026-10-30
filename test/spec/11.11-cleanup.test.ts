@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ToolResult } from "../../src/worker/tools/tool-box.ts";
-import { type CleanupScript, ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { type CleanupScript, ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { type StartOptions, type TestApp, startApp } from "../rig.ts";
 
 const neverFinishes = () => new Promise<never>(() => {});
@@ -13,7 +13,7 @@ async function startWithClosedFlow(
   options: StartOptions = {},
 ): Promise<TestApp> {
   const llm = (options.llm ?? new ScriptedLlm())
-    .onTurn((turn) => turn.end("그래"))
+    .onTurn(async (turn) => turn.end("그래"))
     .onCleanup(...cleanups);
   const app = await startApp(t, { ...options, llm });
   await app.user("오늘 끝");
@@ -41,9 +41,9 @@ function assertRejected(result: ToolResult | undefined, reason: RegExp): void {
 
 test("83, 90d: 정리가 성공하면 기억 쓰기와 done이 함께 커밋된다", async (t) => {
   const app = await startWithClosedFlow(t, [
-    (cleanup) => {
-      cleanup.use("state_write", { content: "오늘 일찍 마무리함" });
-      cleanup.use("memory_write", { title: "  습관  ", content: "저녁에 대화를 끝낸다" });
+    async (cleanup) => {
+      await cleanup.use("state_write", { content: "오늘 일찍 마무리함" });
+      await cleanup.use("memory_write", { title: "  습관  ", content: "저녁에 대화를 끝낸다" });
     },
   ]);
 
@@ -58,7 +58,7 @@ test("83, 90d: 정리가 성공하면 기억 쓰기와 done이 함께 커밋된�
 });
 
 test("84, 85: 정리 실패는 30초부터 두 배씩 300초까지 미루고, cleanup_max_attempts에 닿으면 failed로 두고 다음 작업으로 간다", async (t) => {
-  const fail: CleanupScript = (cleanup) => cleanup.fail();
+  const fail: CleanupScript = async (cleanup) => cleanup.fail();
   const app = await startWithClosedFlow(t, Array(6).fill(fail), {
     config: { cleanup_max_attempts: "6" },
   });
@@ -85,9 +85,11 @@ test("85a: 마지막 정리 시도의 io 중에 죽으면 재시작 뒤 호출 �
 test("90: 정리에는 턴 도구를 주지 않는다", async (t) => {
   const results: ToolResult[] = [];
   await startWithClosedFlow(t, [
-    (cleanup) => {
-      results.push(cleanup.use("goal_create", { job_id: "sample", title: "x", done_criteria: "" }));
-      results.push(cleanup.use("open_reserve", { at: "2026-10-30 15:00", intent: "x" }));
+    async (cleanup) => {
+      results.push(
+        await cleanup.use("goal_create", { job_id: "sample", title: "x", done_criteria: "" }),
+      );
+      results.push(await cleanup.use("open_reserve", { at: "2026-10-30 15:00", intent: "x" }));
     },
   ]);
 
@@ -97,11 +99,11 @@ test("90: 정리에는 턴 도구를 주지 않는다", async (t) => {
 test("90e: 정리 응답 뒤 커밋 전에 죽으면 기억은 그대로고, 재시작 뒤 cleanup_next_at에 다시 돌아 한 번만 반영한다", async (t) => {
   const app = await startWithClosedFlow(t, [
     async (cleanup) => {
-      cleanup.use("memory_write", { title: "습관", content: "첫 시도" });
+      await cleanup.use("memory_write", { title: "습관", content: "첫 시도" });
       await neverFinishes();
     },
-    (cleanup) => {
-      cleanup.use("memory_write", { title: "습관", content: "두 번째 시도" });
+    async (cleanup) => {
+      await cleanup.use("memory_write", { title: "습관", content: "두 번째 시도" });
     },
   ]);
 
@@ -116,8 +118,8 @@ test("90e: 정리 응답 뒤 커밋 전에 죽으면 기억은 그대로고, 재
 
 test("90f: 정리가 실패하면 그 시도의 기억 쓰기를 버린다", async (t) => {
   const app = await startWithClosedFlow(t, [
-    (cleanup) => {
-      cleanup.use("state_write", { content: "반영되면 안 됨" });
+    async (cleanup) => {
+      await cleanup.use("state_write", { content: "반영되면 안 됨" });
       cleanup.fail();
     },
   ]);
@@ -131,12 +133,16 @@ test("90g: 상한을 넘거나 비었거나 제목이 잘못된 기억 쓰기는
   const app = await startWithClosedFlow(
     t,
     [
-      (cleanup) => {
-        results.push(cleanup.use("state_write", { content: "가".repeat(11) }));
-        results.push(cleanup.use("memory_write", { title: "약점", content: "나".repeat(21) }));
-        results.push(cleanup.use("memory_write", { title: "약점", content: "  " }));
-        results.push(cleanup.use("memory_write", { title: "   ", content: "본문" }));
-        results.push(cleanup.use("memory_write", { title: "x".repeat(101), content: "본문" }));
+      async (cleanup) => {
+        results.push(await cleanup.use("state_write", { content: "가".repeat(11) }));
+        results.push(
+          await cleanup.use("memory_write", { title: "약점", content: "나".repeat(21) }),
+        );
+        results.push(await cleanup.use("memory_write", { title: "약점", content: "  " }));
+        results.push(await cleanup.use("memory_write", { title: "   ", content: "본문" }));
+        results.push(
+          await cleanup.use("memory_write", { title: "x".repeat(101), content: "본문" }),
+        );
       },
     ],
     { config: { state_max_chars: "10", memory_section_max_chars: "20" } },
@@ -155,13 +161,13 @@ test("90h: 칸이 memory_max_sections개면 새 칸은 거부하고, 기존 칸 
   const app = await startWithClosedFlow(
     t,
     [
-      (cleanup) => {
-        cleanup.use("memory_write", { title: "약점", content: "1" });
-        cleanup.use("memory_write", { title: "습관", content: "2" });
-        results.push(cleanup.use("memory_write", { title: "성향", content: "3" }));
-        results.push(cleanup.use("memory_write", { title: "약점", content: "1 고침" }));
-        results.push(cleanup.use("memory_delete", { title: "습관" }));
-        results.push(cleanup.use("memory_write", { title: "성향", content: "3" }));
+      async (cleanup) => {
+        await cleanup.use("memory_write", { title: "약점", content: "1" });
+        await cleanup.use("memory_write", { title: "습관", content: "2" });
+        results.push(await cleanup.use("memory_write", { title: "성향", content: "3" }));
+        results.push(await cleanup.use("memory_write", { title: "약점", content: "1 고침" }));
+        results.push(await cleanup.use("memory_delete", { title: "습관" }));
+        results.push(await cleanup.use("memory_write", { title: "성향", content: "3" }));
       },
     ],
     { config: { memory_max_sections: "2" } },
@@ -178,11 +184,11 @@ test("90h: 칸이 memory_max_sections개면 새 칸은 거부하고, 기존 칸 
 test("90i: 같은 정리 안에서 쓴 칸은 memory_read로 바로 읽힌다", async (t) => {
   const results: ToolResult[] = [];
   await startWithClosedFlow(t, [
-    (cleanup) => {
-      cleanup.use("memory_write", { title: "습관", content: "아침형" });
-      results.push(cleanup.use("memory_read", { title: "습관" }));
-      cleanup.use("memory_delete", { title: "습관" });
-      results.push(cleanup.use("memory_read", { title: "습관" }));
+    async (cleanup) => {
+      await cleanup.use("memory_write", { title: "습관", content: "아침형" });
+      results.push(await cleanup.use("memory_read", { title: "습관" }));
+      await cleanup.use("memory_delete", { title: "습관" });
+      results.push(await cleanup.use("memory_read", { title: "습관" }));
     },
   ]);
 

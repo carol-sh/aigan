@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { TelegramError } from "../../src/ports.ts";
-import { ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
 function replyingWith(...say: string[]): ScriptedLlm {

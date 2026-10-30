@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { startApp } from "../rig.ts";
 
 const neverFinishes = () => new Promise<never>(() => {});
@@ -55,8 +55,8 @@ test("115: 열린 흐름에 이어가기 예약이 없으면 복구 예약을 �
 });
 
 test("116: 이어가기 예약이 낡았으면 흐름을 stale로 닫고, 미응답은 판정 대기로, 목표에는 후속 확인을 잡는다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((turn) => {
-    turn.createGoal({ title: "물 한 잔" });
+  const llm = new ScriptedLlm().onTurn(async (turn) => {
+    await turn.createGoal({ title: "물 한 잔" });
     return turn.say("물 마셔", { continueAfter: { minutes: 30 } });
   });
   const app = await startApp(t, { llm });
@@ -107,8 +107,8 @@ test("119: 며칠 다운 뒤에는 지난 개시 예약을 지우고 지난 목�
       (plan) => plan.finishPlan({ openings: [{ at: "15:00" }, { at: "16:00" }] }),
       (plan) => plan.finishPlan({ openings: [{ at: "15:00" }] }),
     )
-    .onTurn((turn) => {
-      turn.createGoal({ title: "운동" });
+    .onTurn(async (turn) => {
+      await turn.createGoal({ title: "운동" });
       return turn.end("목표");
     });
   const app = await startApp(t, { llm });

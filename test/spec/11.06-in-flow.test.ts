@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DurationLike } from "luxon";
 import { Gate } from "../fakes/gate.ts";
-import { ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
 function continueReservation(app: TestApp) {
@@ -123,8 +123,8 @@ test("47b: 흐름 안 턴의 io가 블랙아웃 시작을 넘기면 커밋하고
 test("48: 말 없이 끝내는 흐름 안 턴은 흐름을 닫고 도구 효과를 버리되 본 메시지는 답한 것으로 둔다 (L6)", async (t) => {
   const llm = new ScriptedLlm().onTurn(
     (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
-    (turn) => {
-      turn.createGoal({ title: "산책" });
+    async (turn) => {
+      await turn.createGoal({ title: "산책" });
       return turn.silentEnd();
     },
   );
@@ -148,8 +148,8 @@ test("48: 말 없이 끝내는 흐름 안 턴은 흐름을 닫고 도구 효과�
 test("48i: 말 없이 이어가는 답장 턴은 이어가기를 그대로 두고, 도구 효과를 버리고, 본 메시지는 답한 것으로 둔다", async (t) => {
   const llm = new ScriptedLlm().onTurn(
     (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
-    (turn) => {
-      turn.createGoal({ title: "산책" });
+    async (turn) => {
+      await turn.createGoal({ title: "산책" });
       return turn.say([], { continueAfter: { minutes: 5 } });
     },
   );

@@ -1,4 +1,5 @@
 import type { DateTime } from "luxon";
+import { type TurnInput, assembleTurnInput } from "../llm/input/turn-input.ts";
 import type { PlanDate } from "../time.ts";
 import type { HarnessContext } from "./context.ts";
 import { hasTimeLeftForOpening } from "./reservation-times.ts";
@@ -17,6 +18,7 @@ export interface TurnRequest {
   task: TurnTask;
   planDate: PlanDate;
   tools: ToolBox;
+  input: TurnInput;
 }
 
 /** 턴에서 무엇을 말하고 어떤 도구를 쓸지 정하는 쪽. 테스트는 각본, 실제로는 LLM이다. */
@@ -30,26 +32,25 @@ export interface TurnConversation {
   reconsider(goalsWithoutNextCheck: WorkingGoal[]): Promise<TurnOutput>;
 }
 
-export class InvalidTurnOutputError extends Error {}
-
 export async function runTurn(
   ctx: HarnessContext,
   decider: TurnDecider,
   task: TurnTask,
 ): Promise<void> {
   const planDate = ctx.calendar.currentPlanDate(ctx.clock.now());
-  const lastSeenUserMessageId = ctx.messages.latestUserMessageId();
+  const input = assembleTurnInput(ctx, task, planDate);
   const consumedOpeningId = task.trigger === "open" ? task.reservationId : undefined;
   const changes = TurnChanges.load(ctx, { consumedOpeningId });
   const conversation = decider.begin({
     task,
     planDate,
     tools: createTurnTools({ ctx, changes, planDate }),
+    input,
   });
 
   let output: TurnOutput;
   try {
-    output = checkedOutput(task, await conversation.decide());
+    output = await conversation.decide();
   } catch (error) {
     ctx.logger.warn(`턴(${task.trigger})이 실패해 아무것도 바꾸지 않았다`, error);
     return;
@@ -62,32 +63,26 @@ export async function runTurn(
       })
     : [];
   if (goalsWithoutNextCheck.length > 0) {
-    output = await reconsiderOrKeep(ctx, conversation, task, output, goalsWithoutNextCheck);
+    output = await reconsiderOrKeep(ctx, conversation, output, goalsWithoutNextCheck);
   }
 
-  commitTurn(ctx, { task, planDate, lastSeenUserMessageId, output, changes });
-}
-
-function checkedOutput(task: TurnTask, output: TurnOutput): TurnOutput {
-  if (
-    task.trigger === "continue" &&
-    output.messages.length === 0 &&
-    output.next.kind === "continue"
-  ) {
-    throw new InvalidTurnOutputError("이어가기 턴은 말 없이 이어갈 수 없다");
-  }
-  return output;
+  commitTurn(ctx, {
+    task,
+    planDate,
+    lastSeenUserMessageId: input.lastShownUserMessageId,
+    output,
+    changes,
+  });
 }
 
 async function reconsiderOrKeep(
   ctx: HarnessContext,
   conversation: TurnConversation,
-  task: TurnTask,
   firstOutput: TurnOutput,
   goalsWithoutNextCheck: WorkingGoal[],
 ): Promise<TurnOutput> {
   try {
-    return checkedOutput(task, await conversation.reconsider(goalsWithoutNextCheck));
+    return await conversation.reconsider(goalsWithoutNextCheck);
   } catch (error) {
     ctx.logger.warn("되묻기가 실패해 첫 출력으로 커밋한다", error);
     return firstOutput;
