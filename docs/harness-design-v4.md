@@ -459,7 +459,7 @@ v3에서 뺀 것: `current_flow_id`(열린 흐름은 `flows`에서 파생, I1은
 | `end_reason` | TEXT / NULL | `agent` / `blackout` / `stale` / `failed` |
 | `cleanup_status` | TEXT / NULL | `pending` / `done` / `failed` / `skipped` |
 | `cleanup_attempts`, `cleanup_next_at` | INTEGER, TEXT / NULL | 정리 재시도 |
-| `summary`, `compacted_until_id` | TEXT / NULL, INTEGER / NULL | 압축(v3 §13.2 그대로) |
+| `summary`, `compacted_until_id` | TEXT / NULL, INTEGER / NULL | 압축(v3 §13.2). 범위는 `answered_upto_id`를 넘지 않는다(§9.4) |
 
 - I1: `CREATE UNIQUE INDEX flows_one_open ON flows((ended_at IS NULL)) WHERE ended_at IS NULL`.
 - `flow_goals(flow_id, goal_id, PRIMARY KEY(flow_id, goal_id))`: 흐름을 여는 커밋 tx가 개시 예약의 `goal_ids`를 복사하고(예약 행은 그 tx에서 지워진다), 그 흐름의 턴이 목표를 생성·갱신·종료할 때 커밋 tx에서 더한다.
@@ -663,7 +663,7 @@ run Turn(kind, x):
       gone → void_reason='busy'
       도구 효과 반영(§9.5), flow_goals 기록
       assistant 메시지 삽입(sent_at=NULL)
-    f.answered_upto_id = upto; f.turn_count++
+    f.answered_upto_id = MAX(f.answered_upto_id, upto); f.turn_count++   # 뒤로 가지 않는다
     failure_count=0; output_fail_count=0; output_fail_key=NULL; turn_retry_at=NULL
     if silent and out.next=='continue': pass       # 답장 턴의 조용히 기다림. 기존 continue 예약 유지(at 불변)
     else:
@@ -674,8 +674,10 @@ run Turn(kind, x):
       else: close_flow(f, 'agent')                 # 블랙아웃이면 continue여도 select가 곧 Close(blackout)
 
   send_outbox()                                    # §9.7
-  if f 열림: 압축 검사(v3 §13.2, gate 포함)
+  if f 열림: 압축 검사(v3 §13.2, gate 포함)     # 범위는 id <= f.answered_upto_id까지
 ```
+
+- **미응답은 압축하지 않고, `answered_upto_id`는 뒤로 가지 않는다.** `upto`는 ctx 원문에 넣은 user 메시지로 정해지는데, 압축된 구간은 원문으로 들어가지 않는다. 압축이 미응답을 덮거나 흐름의 user 메시지를 모두 덮은 뒤의 턴은 `upto`가 미응답에 닿지 못하거나 비어서, 성공한 턴이 미응답을 지우지 못한다. 그러면 `select`가 같은 `Turn(reply)`를 백오프 없이(성공이 지운다) 계속 고른다. 그래서 압축 범위는 `answered_upto_id`에서 멈추고(남은 구간이 목표 크기보다 커도), 커밋은 `MAX`로 갱신한다.
 
 - 무시는 `id <= upto`인 `pending`만 표시한다. io 중에 와서 LLM이 보지 못한 메시지는 `pending`으로 남아 다음 판정을 받는다.
 - 커밋 직전 스냅샷 재검증은 하지 않는다. 루프가 하나고 리셋은 오프라인이라 io 동안 바뀌는 것은 새 메시지 삽입, `scheduled→fired`, 시각뿐이다. 앞의 둘은 커밋과 충돌하지 않는다. 시각은 계획일을 pre에서 고정해(`day`) 다루고, 블랙아웃 시작을 넘긴 경우만 위처럼 본다: AI 개시 턴은 취소, 나머지는 커밋하고 보낸 뒤 흐름이 닫힌다(§4.3).
@@ -1110,6 +1112,8 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | 87 | 보류 중 | 정리 안 돎. 해제 뒤 이어짐 |
 | 88 | 압축 임계 초과 | `summary`·`compacted_until_id` 갱신 |
 | 89 | 압축 실패 | 로그. 다음 턴 뒤 재시도 |
+| 89a | 압축 대상에 미응답(`id > answered_upto_id`)이 걸림 | 범위가 `answered_upto_id`에서 멈춤. 미응답은 다음 턴에 원문으로 들어감 |
+| 89b | 압축이 흐름의 user 메시지를 모두 덮은 뒤 `Turn(continue)` | ctx 원문에 user 메시지 없음. `answered_upto_id` 유지(뒤로 가지 않음), 이어서 `Turn(reply)`가 골라지지 않음 |
 | 90 | 계획·정리·압축 호출 | 턴 도구 미제공 |
 | 90a | 정리 입력 | 대화 원문(압축된 구간 포함), 흐름의 계획일 목표 전체와 `flow_goals` 목표(진행 메모·종료 사유, `flow_goals`면 "이 흐름에서 다룸"), 흐름 정보. persona 없음 |
 | 90k | 중간보고 흐름(겨냥 목표의 진행 메모를 고치지 않고 `end`) | 그 목표가 `flow_goals`에 있고 정리 입력에 "이 흐름에서 다룸"으로 나옴 |
