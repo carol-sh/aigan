@@ -139,7 +139,7 @@ active ──▶ done      (AI가 완료로 판정)
 | I7 | 다음 시스템 작업(계획)을 깨울 타이머가 항상 무장돼 있다 | v3 (a) |
 | I8 | 흐름이 열려 있으면 흐름 밖 사용자 메시지는 없다(`pending`·`ignored` 모두) | 신규. §2.5 경계 이동 |
 
-**I3 보정**: 흐름이 닫힐 때(어떤 사유든) 하네스가 I3를 검사한다. 걸린 목표가 있으면 개시 예약을 하네스가 만든다(`source='harness'`, `at`은 `due_at`이 미래면 `due_at`, 없거나 지났으면 `now + orphan_goal_delay`, `intent`는 "후속 확인"). 턴 규칙 프롬프트는 AI가 직접 예약하도록 유도하고, 보정은 안전망이다. 보정이 일어나면 로그에 남겨 프롬프트 개선 신호로 쓴다. 보정 예약은 `open_max_pending`에 걸리지 않는다(I6).
+**I3 보정**: 흐름이 닫힐 때(어떤 사유든) 하네스가 I3를 검사한다. 걸린 목표가 있으면 개시 예약을 하네스가 만든다(`source='harness'`, `at`은 `due_at`이 미래면 `due_at`, 없거나 지났으면 `now + orphan_goal_delay`, `intent`는 "후속 확인"). 시각은 AI가 정하는 것이 원칙이라, AI가 판단할 수 있는 지점(흐름을 끝내는 턴, 말 없는 개시 턴, 계획)에서는 빠뜨리면 하네스가 출력을 되돌려 다시 묻는다(§9.4 되묻기). 보정은 LLM이 없는 종료(`blackout`, `stale`)와 되물어도 또 빠뜨린 경우에만 일어나는 안전망이다. 보정이 일어나면 로그에 남겨 프롬프트 개선 신호로 쓴다. 보정 예약은 `open_max_pending`에 걸리지 않는다(I6).
 
 ---
 
@@ -225,7 +225,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | 도구 | `goal_create`, `goal_update`(진행 메모·마감), `goal_close`(done/failed/dropped + 사유), `open_reserve`(at, intent, goal_ids), `open_cancel` |
 
 - `continue at`이 무효(과거·너무 멂·누락)면 클램프한다(v3 규칙).
-- `end`인데 I3를 깨는 목표가 있으면 흐름 종료 시 보정이 처리한다(§3).
+- 이 턴으로 흐름이 없어지는데(`end`, 또는 개시 턴의 메시지 0개) 다음 확인이 없는 활성 목표가 남으면, 하네스가 그 목표를 알려 주고 한 번 되묻는다(§9.4). AI는 `open_reserve`로 시각을 잡거나 `goal_close`한다.
 - 메시지 0개면 도구 효과를 버린다(원칙 6).
   - 개시 턴: 흐름을 열지 않는다. AI 개시면 "개입 취소", 사용자 개시면 "무시"다. `next`는 보지 않는다.
   - 흐름 안 턴: `continue`는 조용히 기다림, `end`는 말없이 흐름 종료.
@@ -498,6 +498,9 @@ run Turn(kind, x):
   upto = ctx에 넣은 user 메시지의 최대 id
   out = await llm(ctx)                             # 도구 라운드. 도구 효과는 TurnTx에 모은다
   if out 실패: fail_turn(); return
+  if orphans(kind, x, out) 있음:                   # 되묻기. 1회
+    out = await llm(ctx + out + 피드백(orphans))   # 도구 효과는 새로 모은다
+    if out 실패: fail_turn(); return
 
   tx TurnTx:
     silent = out.messages==[]
@@ -529,6 +532,7 @@ run Turn(kind, x):
 - `continue` 출력의 `at`이 누락·무효면 v3 클램프로 메운다.
 - 도구 효과는 io 중에 모이므로, 하네스는 출력이 끝나야 이 턴이 말 없는 턴인지 안다. 그래서 호출 시점에 거부하지 않고 커밋에서 통째로 버린다. 일부만 버리면 같은 턴의 다른 효과가 버린 목표를 참조할 수 있어서다. 버린 경우의 로그는 프롬프트 개선 신호로 쓴다.
 - 원칙 6의 보장 범위: 상태를 바꾼 턴은 반드시 메시지를 하나 이상 outbox에 넣는다. 전송 실패(`undelivered`, 403)로 사용자가 못 받는 경우는 막지 않는다.
+- **되묻기** `orphans(kind, x, out)`: 이 출력을 커밋하면 흐름이 없게 되는 경우(`next=end`, 또는 개시 턴의 메시지 0개)에만 검사한다. 출력의 도구 효과(메시지 0개면 버린 뒤), `x`·continue 삭제를 반영한 상태에서 걸린 `open` 예약이 없는 활성 목표 목록이다. 비어 있지 않으면 "목표 N에 다음 확인이 없다. `open_reserve`로 시각을 잡거나 `goal_close`하라"를 붙여 같은 컨텍스트로 한 번 더 부른다. 두 번째 출력은 그대로 커밋하고, 그래도 남으면 `settle()`이 채운다(로그). 말 없는 개시 턴이 목표에 걸린 예약을 소비하면 원칙 6 때문에 다시 예약할 수 없으므로, 되묻기는 사실상 "말하고 미뤄라"가 된다. 되묻기는 실패가 아니라서 `failure_count`를 올리지 않는다.
 
 **`fail_turn()`** — 파싱 1회 재시도 후에도 실패, 또는 예외.
 
@@ -593,7 +597,7 @@ out = await llm(ctx)
 실패: tx{ plan_attempts++; plan_retry_at = now + backoff(plan_attempts) }
 ```
 
-계획 규칙 파일이 없으면 LLM 없이 `last_plan_date`만 갱신한다. 마지막의 `settle()`은 교체·상한 절단으로 목표에 걸린 `plan` 예약이 사라진 경우를 메운다. 계획 예약도 `goal_ids`를 가질 수 있기 때문이다.
+계획 규칙 파일이 없으면 LLM 없이 `last_plan_date`만 갱신한다. 교체·상한 절단으로 목표에 걸린 예약이 사라지면(계획 예약도 `goal_ids`를 가질 수 있다) 턴과 같이 커밋 전에 한 번 되묻는다. 마지막의 `settle()`은 그래도 남은 경우의 안전망이다.
 
 ### 9.7 전송
 
@@ -633,7 +637,7 @@ v3 부록 A에서 `inbound_*`, `pool_*`, `plan_max_items`, `random_*`을 빼고 
 |---|---|---|
 | `goal_max_active` | 8 | I6 |
 | `open_max_pending` | 6 | I6 |
-| `orphan_goal_delay_sec` | 3600 | I3 보정 예약 시각 |
+| `orphan_goal_delay_sec` | 3600 | I3 보정 예약 시각. 되묻기 뒤에도 빠진 경우와 LLM 없는 종료에만 쓰인다 |
 | `cleanup_max_attempts` | 5 | |
 | `cleanup_backoff_first_sec` / `cleanup_backoff_cap_sec` | 30 / 300 | |
 
@@ -711,7 +715,7 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 |---|---|---|
 | 23 | 흐름 없음, 개시 예약 발화 | 흐름(`opener='ai'`, `opened_by_reservation_id`, `opened_intent`), 예약 삭제, continue 1개 |
 | 24 | 첫 턴 메시지 0개(`end`든 `continue`든) | 흐름 없음, 예약 삭제, `settle()` (L6) |
-| 25 | 24에서 그 예약이 어떤 목표의 유일한 예약이고 다시 예약하지 않음 | `settle()`이 `harness` 예약 생성 |
+| 25 | 24에서 그 예약이 어떤 목표의 유일한 예약 | 되묻기 1회("말하고 미뤄라"). 두 번째도 0개면 `settle()`이 `harness` 예약 생성 |
 | 26 | 첫 턴 메시지 0개 + `open_reserve`·`goal_create` | 도구 효과 전부 버림, 로그 (L6) |
 | 27 | 사전 검사: `goal_ids` 모두 종료 | 예약 삭제, 턴 없음 |
 | 28 | `goal_ids` 일부만 종료 | 개시 |
@@ -768,7 +772,10 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 
 | # | 상황 | 기대 |
 |---|---|---|
-| 62 | 닫힘, 예약 없는 활성 목표(`due_at` 없음) | `harness` 예약, `at=now+orphan_goal_delay_sec`, 로그 |
+| 62 | `end` 출력, 예약 없는 활성 목표가 남음 | 목표를 알려 주고 되묻기 1회. 두 번째 출력이 `open_reserve` 또는 `goal_close`면 그대로 커밋 (L8) |
+| 62a | 두 번째 출력도 빠뜨림 | 커밋 후 `settle()`: `harness` 예약 `at=now+orphan_goal_delay_sec`(`due_at` 없음), 로그 |
+| 62b | `continue` 출력, 예약 없는 활성 목표 | 되묻지 않음(열린 흐름이 I3를 만족) |
+| 62c | 되묻기 | LLM 호출 +1, `failure_count` 불변 |
 | 63 | `due_at` 있음 | `at=due_at` |
 | 64 | `due_at`이 지남 | `now+orphan_goal_delay_sec` (L7) |
 | 65 | `due_at`이 블랙아웃 안 | 블랙아웃 끝 |
@@ -824,7 +831,7 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | 95 | 계획 규칙 파일 없음 | LLM 없이 `last_plan_date`만 갱신 |
 | 96 | 예약이 상한 초과 | `at` 순으로 상한까지, 나머지 로그 |
 | 97 | 이전 계획의 `scheduled` 예약 | 교체. `fired`이거나 `turn` 출처인 예약은 유지 |
-| 98 | 교체로 어떤 목표의 예약이 사라짐 | `settle()`이 `harness` 예약 생성 (L2) |
+| 98 | 교체로 어떤 목표의 예약이 사라짐 | 되묻기 1회. 그래도 남으면 `settle()`이 `harness` 예약 생성 (L2, L8) |
 | 99 | 계획 예약 `at`이 블랙아웃 안 / 과거 | 블랙아웃 끝 / `now+min_lead` |
 
 ### 11.13 전송
@@ -898,3 +905,4 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 | L5 | AI 개시 턴에서 곧 지워질 `x`가 I6 집계에 들어가 상한이 1 줄어듦 | `x`는 지운 것으로 봄(§9.5) |
 | L6 | 말 없는 턴(개입 취소, 흐름 안 메시지 0개)에서 목표가 바뀔 수 있음. 사용자가 지시받은 적 없는 목표로 재촉받는다 | 원칙 6. 메시지 0개 턴은 도구 효과를 버림. 개시 턴 메시지 0개 = 흐름 안 엶, `respond` 필드 제거(§9.4) |
 | L7 | 마감 지난 목표를 `settle()`이 지난 `due_at`으로 예약 → 클램프가 `now+min_lead`로 당겨 몇 분마다 재확인 | 지났으면 `now+orphan_goal_delay_sec`(§9.6) |
+| L8 | 흐름을 끝내며 목표의 다음 확인을 빠뜨리면 하네스가 기계값(1시간)으로 조용히 메움. 판단이 AI에서 하네스로 넘어감 | 흐름이 없어지는 턴과 계획은 커밋 전에 한 번 되묻기(§9.4). 기계값은 LLM 없는 종료와 되묻기 뒤에도 빠진 경우만 |
