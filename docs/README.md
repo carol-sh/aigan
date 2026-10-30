@@ -17,6 +17,7 @@
 |---|---|
 | [`prompting/harness-scenario-v4-evaluation.md`](prompting/harness-scenario-v4-evaluation.md) | 의심하고 평가하는 Agent |
 | [`prompting/harness-scenario-agent-owner.md`](prompting/harness-scenario-agent-owner.md) | 자기 일을 하려고 사용자를 도구로 쓰는 매우 pushy한 Agent의 하루 |
+| [`prompting/harness-scenario-agent-owner-shortcuts.md`](prompting/harness-scenario-agent-owner-shortcuts.md) | 같은 Agent의 다음 날. 꼼수 부리고 늘어지는 사용자를 혼내며 목표를 달성 |
 
 ## 기록 (구현에 필요 없음)
 
