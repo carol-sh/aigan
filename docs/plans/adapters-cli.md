@@ -279,7 +279,7 @@ package.json                      # "reset", "memory" 스크립트
 ```
 DATA_DIR/
 ├── config      # examples/config.example을 복사해 채운다
-└── prompts/    # examples/prompts를 복사하고 본문을 쓴다
+└── prompts/    # examples/prompts를 복사한다. 방침(jobs/)은 자기 것으로 바꾼다. prompts.md
 ```
 
 | 명령 | 하는 일 |

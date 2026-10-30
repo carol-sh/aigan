@@ -22,6 +22,7 @@
 | [`plans/plan.md`](plans/plan.md) | 6단계 계획 실행기 구현 계획. 계획 입력·출력·커밋, 시각 범위와 상한, `plan-rules.md` 작성용 계약 |
 | [`plans/compact.md`](plans/compact.md) | 7단계 압축 구현 계획. 압축 범위와 `answered_upto_id`, 턴·정리 입력의 요약, `compact-rules.md` 작성용 계약 |
 | [`plans/adapters-cli.md`](plans/adapters-cli.md) | 8단계 어댑터·CLI 구현 계획. OpenAI·텔레그램 어댑터, `serve`·`reset`·`memory`, 실행 방법과 수동 스모크 절차 |
+| [`plans/prompts.md`](plans/prompts.md) | 9단계 예시 프롬프트 세트. 파일별 책임, 자기 일 Agent와 알고리즘 노트 방침, 구조 테스트, 고칠 때 볼 것과 수동 스모크 체크리스트 |
 
 ## 프롬프트 작성용
 
