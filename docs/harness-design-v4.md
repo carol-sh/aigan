@@ -1,6 +1,6 @@
 # aigan 하네스 설계 v4 (골격)
 
-- 상태: 초안. 골격(§1–§7) 합의 후 DB 스키마(§8)와 워커 의사코드(§9)를 붙였다. 테스트 목록은 다음 단계.
+- 상태: 초안. 골격(§1–§7) 합의 후 DB 스키마(§8), 워커 의사코드(§9), 테스트 목록(§11)을 붙였다. 다음은 memory 설계.
 - 참고: `harness-design.md`(v3.0), `harness-trace.md`. v3는 버리지 않고 실행 계층의 참고로 쓴다(§6).
 
 ---
@@ -226,7 +226,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 
 - `continue at`이 무효(과거·너무 멂·누락)면 클램프한다(v3 규칙).
 - `end`인데 I3를 깨는 목표가 있으면 흐름 종료 시 보정이 처리한다(§3).
-- 메시지 0개 + `continue`는 허용한다(조용히 기다림). 메시지 0개 + `end`는 개시 턴이면 "개입 취소"로 본다.
+- 메시지 0개 + `continue`는 허용한다(조용히 기다림). 메시지 0개 + `end`는 개시 턴이면 "개입 취소"로 본다. 취소여도 도구 효과(다른 시각으로 다시 예약 등)는 반영한다(§9.4).
 
 ### 5.2 계획
 
@@ -410,12 +410,12 @@ v3 §9를 기준으로 고친다. 핵심 차이는 **이벤트 큐가 없다**�
 |---|---|
 | 텔레그램 폴러 | `owner_chat_id` 확인 → `messages` 삽입(`tg_update_id` 중복이면 무시). 열린 흐름이 있으면 `flow_id`=그 흐름, 없으면 `flow_id=NULL, triage='pending'`. `wake()` |
 | 타이머 | 다음 기한에 발화. `UPDATE reservations SET state='fired' WHERE state='scheduled' AND at<=now`. `wake()` |
-| 리셋 CLI | 프로세스가 멈춘 상태에서만 DB를 고친다(v3 §15.3). 효과는 다음 부팅 때 보인다 |
+| 리셋 CLI | 프로세스가 멈춘 상태에서만 DB를 고친다(§9.11). 효과는 다음 부팅 때 보인다 |
 
 - DB 쓰기는 모두 동기 tx라 생산자 콜백은 루프의 tx 사이에만 끼어든다. 폴러가 읽는 "열린 흐름"은 그 순간의 확정 상태다.
 - 블랙아웃·계획일 경계는 별도 생산자 없이 다음 기한에 포함된다.
 
-**다음 기한** `next_deadline()` — 아래 중 최솟값. 루프가 잠들기 직전에 매번 다시 계산한다.
+**다음 기한** `next_deadline()` — 아래 중 **`now`보다 뒤인 것**의 최솟값. 없으면 타이머를 걸지 않는다. 루프가 잠들기 직전에 매번 다시 계산한다.
 
 | 항목 | 값 |
 |---|---|
@@ -423,8 +423,10 @@ v3 §9를 기준으로 고친다. 핵심 차이는 **이벤트 큐가 없다**�
 | 디바운스 | 디바운스 대상(열린 흐름의 미응답, 흐름이 없으면 `pending`)이 있으면 그중 `MAX(ts) + message_debounce_sec` |
 | 턴 백오프 | `turn_retry_at` |
 | 정리 재시도 | `MIN(cleanup_next_at) WHERE cleanup_status='pending'` |
-| 계획 | 계획이 밀렸으면 `MAX(now, plan_retry_at)`, 아니면 다음 블랙아웃 시작 |
+| 계획 | 계획이 밀렸으면 `plan_retry_at`, 아니면 다음 블랙아웃 시작 |
 | 보류 | `hold_until` |
+
+이미 지난 값은 빼야 한다. 루프가 잠드는 시점에 지난 값이 남아 있다면, 그 작업은 다른 조건(열린 흐름, 정리, 턴 백오프, 보류, 다른 메시지의 디바운스)에 막혀 있다는 뜻이다. 그 값을 조준하면 타이머가 곧바로 발화하고 `select`가 다시 null을 내는 바쁜 루프가 된다. 막는 조건은 각자 기한(위 표)이나 `wake()`(메시지 수신, 흐름 종료는 루프 안에서 일어남)를 갖고 있어서, 빼도 깨어날 기회를 잃지 않는다.
 
 ### 9.2 루프
 
@@ -466,19 +468,19 @@ select():
   g = cleanup_status='pending'인 흐름 중 ended_at이 가장 이른 것
   if g: return g.cleanup_next_at <= now ? Cleanup(g) : null    # 0번이 1~3을 막는다
   if not turn_ok: return null
+  p = 흐름 밖 pending
+  if p 있음 and MAX(p.ts) + debounce > now: return null        # 입력 중이면 1~3 모두 기다린다
   for r in open 예약 WHERE state='fired' ORDER BY at, id:     # 1번
     if 블랙아웃: r.state='scheduled', r.at=블랙아웃 끝; continue
     if r.goal_ids 있고 모두 종료: tx{ r 삭제; settle() }; continue    # 사전 검사
     return Turn(open, r)
-  p = 흐름 밖 pending
-  if p 있음:                                                    # 2번
-    return MAX(p.ts) + debounce <= now ? Turn(user, p) : null
+  if p 있음: return Turn(user, p)                               # 2번
   if 계획 밀림 and (plan_retry_at IS NULL or plan_retry_at <= now): return Plan()   # 3번
   return null
 ```
 
 - `select` 안의 쓰기(블랙아웃 재예약, 사전 검사 삭제)는 LLM을 부르지 않는 짧은 tx다.
-- 2번이 디바운스 대기 중이면 3번(계획)도 기다린다. 순서를 그대로 지키기 위해서다.
+- 흐름 밖 `pending`이 디바운스 대기 중이면 1~3 모두 기다린다. 개시 턴은 그 메시지를 흡수하므로, 기다리지 않으면 쓰다 만 입력을 보고 말을 걸게 된다(흐름 안의 §4.1 규칙과 같은 이유). 미뤄지는 시간은 디바운스 길이뿐이다. 정리는 메시지를 읽지 않으므로 기다리지 않는다.
 
 ### 9.4 턴
 
@@ -498,7 +500,8 @@ run Turn(kind, x):
       x(pending 메시지) → triage='ignored'; failure_count=0; turn_retry_at=NULL
       return                                       # 도구 효과는 버린다
     if kind=='open' and out.messages==[] and out.next=='end':
-      x(open 예약) 삭제; settle(); 초기화(failure_count, turn_retry_at)
+      x(open 예약) 삭제; 도구 효과 반영(§9.5, flow_goals 없음)
+      settle(); 초기화(failure_count, turn_retry_at)
       return                                       # 개입 취소. 흐름을 만들지 않는다
     if kind in (open, user):
       f = flows 삽입(opener, opened_by_*, answered_upto_id=0)
@@ -519,6 +522,7 @@ run Turn(kind, x):
 - 커밋 직전 스냅샷 재검증은 하지 않는다. 루프가 하나고 리셋은 오프라인이라 io 동안 바뀌는 것은 새 메시지 삽입과 `scheduled→fired`뿐이며, 둘 다 커밋과 충돌하지 않는다.
 - io 중 온 메시지: 흐름이 있으면 그 흐름의 미응답(`id > upto`)으로 남아 다음 턴 입력이 된다. 흐름을 여는 턴이면 아직 흐름 밖이었다가 커밋 tx가 흡수하고, 역시 `id > upto`라 미응답이 된다.
 - `continue` 출력의 `at`이 누락·무효면 v3 클램프로 메운다.
+- 개입 취소에서도 도구 효과는 반영한다. "지금은 아니고 15시에 다시"(`open_reserve`)가 취소의 흔한 형태라서, 버리면 미루기가 불가능해진다. `respond=false`는 "완전히 무시"(§4.4)라서 도구 효과를 버린다.
 
 **`fail_turn()`** — 파싱 1회 재시도 후에도 실패, 또는 예외.
 
@@ -531,7 +535,7 @@ tx: failure_count++; turn_retry_at = now + backoff(failure_count)
 
 ### 9.5 도구 검증
 
-TurnTx는 도구 효과를 모으고, 이후 도구 라운드는 그 효과가 반영된 상태를 읽는다. 검증에 실패하면 거부 결과를 돌려주고 턴은 계속된다.
+TurnTx는 도구 효과를 모으고, 이후 도구 라운드는 그 효과가 반영된 상태를 읽는다. 검증에 실패하면 거부 결과를 돌려주고 턴은 계속된다. AI 개시 턴에서는 그 턴의 개시 예약 `x`를 이미 지운 것으로 본다. 그래서 `x`는 I6 집계에서 빠지고 `open_cancel(x)`는 거부된다(커밋 tx가 어차피 지운다).
 
 | 도구 | 거부 조건 | 효과 |
 |---|---|---|
@@ -578,11 +582,12 @@ out = await llm(ctx)
 성공: tx{ plans upsert(현재 계획일)
           source='plan' AND state='scheduled'인 open 예약 삭제
           out.reservations를 클램프·블랙아웃 적용 후 at 순으로, I6 상한까지 삽입(초과분 로그)
-          last_plan_date=현재 계획일; plan_attempts=0; plan_retry_at=NULL }
+          last_plan_date=현재 계획일; plan_attempts=0; plan_retry_at=NULL
+          settle() }
 실패: tx{ plan_attempts++; plan_retry_at = now + backoff(plan_attempts) }
 ```
 
-계획 규칙 파일이 없으면 LLM 없이 `last_plan_date`만 갱신한다.
+계획 규칙 파일이 없으면 LLM 없이 `last_plan_date`만 갱신한다. 마지막의 `settle()`은 교체·상한 절단으로 목표에 걸린 `plan` 예약이 사라진 경우를 메운다. 계획 예약도 `goal_ids`를 가질 수 있기 때문이다.
 
 ### 9.7 전송
 
@@ -626,11 +631,266 @@ v3 부록 A에서 `inbound_*`, `pool_*`, `plan_max_items`, `random_*`을 빼고 
 | `cleanup_max_attempts` | 5 | |
 | `cleanup_backoff_first_sec` / `cleanup_backoff_cap_sec` | 30 / 300 | |
 
+### 9.11 리셋 CLI
+
+v3 §15.3을 고친다. 프로세스가 멈춘 상태에서만 동작한다(잠금 획득 실패 시 거부).
+
+**`aigan reset`** — 런타임 상태만 비운다. `messages`, `flows`, `goals`(행), `plans`, `llm_calls`, memory는 기록으로 남긴다.
+
+- 열린 흐름 → `close_flow(f, 'reset')`(정리 `skipped`, 미응답 `void_reason='reset'`, `settle` 없음).
+- `reservations` 전부 삭제.
+- `active` 목표 → `dropped`, `end_reason='reset'`. 예약이 모두 사라지므로 살려 두면 I3가 깨진다. v3가 풀 항목을 `cancelled`로 닫던 것과 같다.
+- 흐름 밖 메시지(`pending`·`ignored`) → `void_reason='reset'`.
+- outbox → `undelivered`. `cleanup_status='pending'` → `skipped`.
+- `harness_state`: 보류, `failure_count`, `turn_retry_at`, `plan_attempts`, `plan_retry_at`, `last_plan_date` 초기화. `daily_calls`는 유지한다.
+- 다음 부팅에서 계획이 바로 돈다.
+
+**`aigan reset --all`** — DB와 memory를 지운다(설정·프롬프트는 유지). 확인 입력을 요구한다.
+
 ---
 
 ## 10. 다음 단계
 
 1. 이 골격(개체·불변식·이벤트 반응·LLM 접점) 합의.
 2. ~~DB 스키마, 워커 루프·흐름 연산 의사코드~~ → §8, §9.
-3. 시나리오 추적(물 마시기 동기 흐름, 9시 지시 → 1시 중간보고 → 3시 최종보고, 흐름 중 다른 목표의 마감 도래, 블랙아웃 중 사용자 보고, 무시 후 재언급).
-4. 테스트 목록.
+3. ~~시나리오 추적~~ → §11.16 통합 테스트로 흡수.
+4. ~~테스트 목록~~ → §11.
+5. memory 설계(J2 무시한 메시지 기록, K1 사람이 만든 결과물 보관, 정리 호출의 입력·도구).
+6. 프롬프트 본문(턴 규칙·상위 프롬프트·방침·계획·정리). K4(모은 것의 쓸모) 반영.
+7. §9.10 기본값 확정(구현 후 실측).
+
+---
+
+## 11. 테스트 목록
+
+v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 표시한 행은 이 목록을 쓰며 의사코드를 따라가다 발견해 §9에 반영한 결함이다(§11.17).
+
+### 11.1 부팅·리셋
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 1 | 첫 실행 | 초기값. 계획 밀림이라 즉시 `Plan`, 계획이 낸 개시 예약 저장 |
+| 2 | 첫 계획이 예약 0개 | 다음 계획까지 AI가 먼저 말 걸지 않음. 사용자 메시지는 판정 |
+| 3 | 블랙아웃 설정 비었음 / 턴 규칙 프롬프트 없음 | 시작 실패 |
+| 4 | 두 번째 인스턴스 / 실행 중 `aigan reset` | 잠금 거부 |
+| 5 | `aigan reset`(열린 흐름, 활성 목표, 흐름 밖 메시지, outbox, 정리 `pending` 있음) | 흐름 `reset`(정리 `skipped`, 미응답 `void_reason='reset'`), 예약 전부 삭제, 활성 목표 `dropped('reset')`, 흐름 밖 메시지 void, outbox `undelivered`, `daily_calls` 유지, 다음 부팅에 `Plan` (L4) |
+| 6 | `aigan reset --all` | 첫 실행 상태 |
+
+### 11.2 수신
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 7 | 흐름 열림 + 메시지 | `flow_id`=그 흐름, `triage` NULL |
+| 8 | 흐름 없음 + 메시지 | `flow_id` NULL, `pending` |
+| 9 | 같은 `tg_update_id` 재수신 | 무시 |
+| 10 | `owner_chat_id`가 아닌 채팅 | 무시 |
+| 11 | "/pause" 같은 텍스트 | 일반 메시지 |
+| 12 | 흐름을 닫는 턴의 io 중 도착 | 닫는 tx가 흐름 밖 `pending`으로 옮김. 정리 뒤 판정 |
+
+### 11.3 작업 고르기·다음 기한
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 13 | 흐름 없음, `fired` 개시 예약 + 디바운스 지난 `pending` | `Turn(open)`. 커밋 tx가 `pending`을 흡수(`accepted`), 별도 판정 없음 |
+| 14 | 흐름 없음, `fired` 개시 예약 + 디바운스 대기 중 `pending` | 디바운스 만료까지 아무 턴도 안 고름. 만료 뒤 `Turn(open)` (L3) |
+| 15 | `fired` 개시 예약 3개 | `at`, `id` 순으로 하나씩. 각 흐름이 닫히고 정리가 끝난 뒤 다음 |
+| 16 | 정리 `pending` + `fired` 개시 예약 + `pending` 메시지 | 정리 먼저. 정리 재시도 대기 중에는 어떤 턴도 안 돎 |
+| 17 | 계획 밀림 + `pending` 디바운스 대기 | 계획도 기다림 |
+| 18 | 계획 밀림 + 흐름 열림 | 흐름이 닫히고 정리가 끝난 뒤 계획. 그동안 다음 기한에 계획 항목 없음(바쁜 루프 없음) (L1) |
+| 19 | `turn_retry_at` 미래 + 디바운스 지난 `pending` | 다음 기한 = `turn_retry_at`. 그 전에는 깨어나지 않음 (L1) |
+| 20 | 보류 중 + 디바운스 지난 메시지 | 다음 기한 = `hold_until`(`blocked`면 없음). 바쁜 루프 없음 (L1) |
+| 21 | 작업 중 `wake()` | 무시. 작업이 끝나면 `select` |
+| 22 | 기한 후보 없음(`blocked` 보류) | 타이머 없음. 메시지 수신의 `wake()`만 깨움 |
+
+### 11.4 AI 개시 턴
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 23 | 흐름 없음, 개시 예약 발화 | 흐름(`opener='ai'`, `opened_by_reservation_id`, `opened_intent`), 예약 삭제, continue 1개 |
+| 24 | 첫 턴 메시지 0개 + `end` | 흐름 없음, 예약 삭제, `settle()`. 같은 턴의 `open_reserve`는 반영 (L6) |
+| 25 | 24에서 그 예약이 어떤 목표의 유일한 예약이고 다시 예약하지 않음 | `settle()`이 `harness` 예약 생성 |
+| 26 | 첫 턴 메시지 0개 + `continue` | 흐름 열림(조용히 기다림) |
+| 27 | 사전 검사: `goal_ids` 모두 종료 | 예약 삭제, 턴 없음 |
+| 28 | `goal_ids` 일부만 종료 | 개시 |
+| 29 | 흐름 중 개시 예약 발화 | `fired`로 대기. 턴 컨텍스트의 밀린 개입 목록에 나옴 |
+| 30 | 밀린 개입을 `open_cancel`로 합침 | 삭제. 흐름이 닫힐 때 `settle()`이 남은 목표를 확인 |
+| 31 | 개시 턴 io 중 도착한 메시지 | 커밋 tx가 흡수. `id > upto`라 미응답 → 디바운스 뒤 `Turn(reply)` |
+| 32 | 흐름이 닫힌 직후 다른 개시 예약이 `fired`(D1) | 최소 간격 없이 정리 뒤 바로 개시 |
+
+### 11.5 사용자 개시·판정
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 33 | `respond=true` | 흐름(`opener='user'`). 흐름 밖 메시지 전부 이동(`pending`→`accepted`, `ignored` 유지) |
+| 34 | `respond=false` | `pending`→`ignored`. 메시지·도구 효과 없음. 실패 상태 초기화 |
+| 35 | `respond=false` 턴의 io 중 도착 | `pending`으로 남음 → 새 디바운스 뒤 `Turn(user)`. 컨텍스트에 앞서 무시한 메시지 포함 |
+| 36 | 무시 뒤 AI 개시 | 무시한 메시지가 새 흐름 대화에 들어감, `triage='ignored'` 유지 |
+| 37 | `respond=true` + 메시지 0개 + `end` | 흐름이 열리고 바로 닫힘. 사용자 메시지가 있으므로 정리 `pending` |
+| 38 | 블랙아웃 중 사용자 메시지 | 판정함. 받으면 흐름 열림 |
+| 39 | `continue`·`reply` 턴의 `respond` 필드 | 무시 |
+
+### 11.6 흐름 안 턴
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 40 | continue 발화, 미응답 없음 | `Turn(continue)` |
+| 41 | continue 발화 전 사용자 답 | 디바운스 뒤 `Turn(reply)`, continue 교체 |
+| 42 | 디바운스 대기 중 continue 발화 | 만료까지 대기. 턴 하나가 둘 다 처리 |
+| 43 | 턴 io 중 continue 발화 | 커밋이 `fired` continue를 지우고 새로 삽입 |
+| 44 | 턴 io 중 메시지(m3) | 미응답으로 남아 다음 턴 입력 |
+| 45 | `next=end` | `close_flow('agent')` |
+| 46 | `continue at` 누락 / 과거 / 1주 뒤 | 클램프 |
+| 47 | `continue at`이 블랙아웃 안 | 보정 안 함 |
+| 48 | 메시지 0개 + `continue` | 허용 |
+
+### 11.7 도구
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 49 | `goal_create`, 활성 목표 = `goal_max_active` | 거부, 턴 계속 |
+| 50 | `goal_create`, 없는 방침 id | 거부 |
+| 51 | `goal_create` 성공 | `policy_snapshot` 복사, `flow_goals` 기록 |
+| 52 | `goal_update`·`goal_close`, 비활성 목표 | 거부 |
+| 53 | `goal_close` | 걸린 예약은 남음. 발화 때 사전 검사가 지움 |
+| 54 | `open_reserve`, `goal_ids`에 비활성 목표 | 거부 |
+| 55 | `open_reserve`, I6 상한(`scheduled`+`fired`, `harness` 제외) | 거부 |
+| 56 | AI 개시 턴의 `x` | I6 집계에서 빠짐, `open_cancel(x)` 거부 (L5) |
+| 57 | `open_reserve at`이 블랙아웃 안 | 블랙아웃 끝 |
+| 58 | `open_cancel`로 `harness` 예약 취소 | 허용 |
+| 59 | 목록 밖 도구 | 거부 |
+| 60 | 도구 효과 뒤 다음 라운드 | 반영된 상태를 읽음 |
+| 61 | `respond=false` 또는 실패한 턴의 도구 효과 | 버림 |
+
+### 11.8 흐름 닫기·I3 보정
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 62 | 닫힘, 예약 없는 활성 목표(`due_at` 없음) | `harness` 예약, `at=now+orphan_goal_delay_sec`, 로그 |
+| 63 | `due_at` 있음 | `at=due_at` |
+| 64 | `due_at`이 지남 | `now+min_lead` |
+| 65 | `due_at`이 블랙아웃 안 | 블랙아웃 끝 |
+| 66 | 보정 예약이 여러 개 | I6 상한 무시 |
+| 67 | 닫힐 때 미응답 있음 | 흐름 밖 `pending` |
+| 68 | 메시지 0개 흐름 | 정리 `skipped` |
+| 69 | 정리 규칙 파일 없음 | 정리 `skipped` |
+
+### 11.9 블랙아웃
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 70 | 블랙아웃 중 continue 발화, 미응답 없음 | `Close(blackout)`, LLM 호출 없음, `settle()` |
+| 71 | 같은 상황, 미응답 있음 | 턴 |
+| 72 | 흐름 없음, 블랙아웃 중 `fired` 개시 예약(재시작 등) | 블랙아웃 끝으로 재예약 |
+| 73 | 블랙아웃 직전에 고른 개시 턴이 블랙아웃 중 커밋 | 흐름 열림. 이후 continue 발화는 70·71 규칙 |
+| 74 | 블랙아웃 진입 + 흐름 열림 | 흐름 이어짐. 닫히고 정리 뒤 계획 |
+| 75 | 흐름이 블랙아웃 끝을 넘김 | 닫힌 뒤 계획. 계획일은 그 블랙아웃의 계획일 |
+
+### 11.10 턴 실패
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 76 | 파싱 1회 실패 | 재시도 |
+| 77 | 재시도 실패 / 네트워크 오류 | `fail_turn`: `failure_count++`, `turn_retry_at` |
+| 78 | `failure_alert_after` 도달 | 알림 1회 |
+| 79 | 백오프 중 | 어떤 턴도, `Close(blackout)`·계획도 안 고름. 정리는 돎 |
+| 80 | `fail_turn` tx 중 크래시 | 롤백. 트리거 그대로라 재시작 뒤 재시도 |
+| 81 | 실패 뒤 성공 | `failure_count=0`, `turn_retry_at=NULL` |
+| 82 | 실패한 `Turn(open)` | 예약 `fired` 유지. `turn_retry_at` 뒤 같은 예약으로 다시 |
+
+### 11.11 정리·압축
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 83 | 정리 성공 | `done` |
+| 84 | 정리 실패 | `cleanup_next_at`: 30, 60, 120, 240, 300초(상한) |
+| 85 | `cleanup_max_attempts` 도달 | `failed`, 알림, 다음 작업으로 진행 |
+| 86 | 정리 대기 중 메시지 | `pending`으로 쌓임. 정리 뒤 판정 |
+| 87 | 보류 중 | 정리 안 돎. 해제 뒤 이어짐 |
+| 88 | 압축 임계 초과 | `summary`·`compacted_until_id` 갱신 |
+| 89 | 압축 실패 | 로그. 다음 턴 뒤 재시도 |
+| 90 | 계획·정리·압축 호출 | 턴 도구 미제공 |
+
+### 11.12 계획
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 91 | `00:00-08:00` | 계획일당 1회, 블랙아웃 시작에 실행 |
+| 92 | `23:00-07:00`, D+1 01:00 재시작 | 재실행 없음 |
+| 93 | `23:00-07:00`, D+1 23:00 진입 | 실행(계획일 D+2) |
+| 94 | 계획 실패 | `plan_retry_at` 백오프, 재시도 |
+| 95 | 계획 규칙 파일 없음 | LLM 없이 `last_plan_date`만 갱신 |
+| 96 | 예약이 상한 초과 | `at` 순으로 상한까지, 나머지 로그 |
+| 97 | 이전 계획의 `scheduled` 예약 | 교체. `fired`이거나 `turn` 출처인 예약은 유지 |
+| 98 | 교체로 어떤 목표의 예약이 사라짐 | `settle()`이 `harness` 예약 생성 (L2) |
+| 99 | 계획 예약 `at`이 블랙아웃 안 / 과거 | 블랙아웃 끝 / `now+min_lead` |
+
+### 11.13 전송
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 100 | 5000자 | 분할 |
+| 101 | 커밋 후 전송 전 크래시, 곧 재시작 | outbox 재전송 |
+| 102 | 오래 다운 후 재시작 | 낡은 outbox `undelivered` |
+| 103 | 403 | 남은 것 `undelivered`, 보류 `blocked`, `hold_since` |
+| 104 | `blocked` 중 사용자 메시지 | 해제 → `resume()` |
+| 105 | 429 | `retry_after` 뒤 재시도 |
+| 106 | 그 외 전송 오류 | 그 메시지만 `undelivered` |
+
+### 11.14 보류
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 107 | 일일 상한 도달 상태에서 턴 | 게이트가 보류. 상태 불변, 트리거 유지 |
+| 108 | 보류 중 메시지 | 기록만 |
+| 109 | 자정 해제 | `resume()` → `select`가 밀린 것 처리 |
+| 110 | 잔액 부족 | `balance_retry_sec` 뒤 재확인 |
+| 111 | 보류 중 블랙아웃 시작이 지남 | 해제 뒤 계획 |
+| 112 | 자정 넘겨 재시작 | 첫 호출 직전 `daily_calls` 리셋 |
+
+### 11.15 복구
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 113 | 디바운스 대기 중 재시작 | 기한이 지났으면 바로 턴 |
+| 114 | 턴 io 중 크래시 | 커밋 전이라 흡수·예약 삭제 없음. 같은 작업 재실행 |
+| 115 | 열린 흐름에 continue 없음 | 복구 예약(`source='harness'`), `failure_count` 불변 |
+| 116 | 열린 흐름의 continue가 낡음 | `close_flow('stale')`, 미응답 `pending`, `settle()` |
+| 117 | 블랙아웃 중 재시작 + `fired` 개시 예약 | 블랙아웃 끝으로 재예약 |
+| 118 | 정리 `pending`으로 재시작 | `cleanup_next_at`에 재시도 |
+| 119 | 며칠 다운 뒤 지난 개시 예약 여러 개 | 순서대로 개시. 첫 턴이 메시지 0개 + `end`로 취소 가능 |
+| 120 | 계획 io 중 크래시 | 재시작 뒤 다시 `Plan` |
+
+### 11.16 통합(시나리오)
+
+§10의 시나리오 추적 항목. LLM은 스크립트로 고정한 가짜를 쓴다.
+
+| # | 상황 | 기대 |
+|---|---|---|
+| 121 | 물 마시기 동기 흐름 | 개시 → `goal_create` → 재촉 continue → "마셨어" → `goal_close(done)` → `end` → 정리 |
+| 122 | 9시 지시 → 13시 중간보고 → 15시 최종보고 | `goal_create(due 15:00)` + `open_reserve` 13:00·15:00(`goal_ids`). 흐름 세 개가 한 목표에 붙음. 보정 예약 없음 |
+| 123 | 흐름 중 다른 목표의 마감 | 마감 예약 `fired` 대기 → 밀린 개입 목록 → 합치기(`open_cancel`) 또는 닫은 뒤 개시 |
+| 124 | 블랙아웃 중 사용자 보고 | 판정 → 흐름 → `goal_close` → 블랙아웃 중 continue 발화, 미응답 없음 → 닫힘 |
+| 125 | 무시 후 재언급 | `ignored` → 다음 흐름 대화에 남음 → 재언급 때 AI가 이미 앎 |
+| 126 | 부트스트랩 설정으로 하루 | 계획 → 개입 몇 번 → 블랙아웃 → 다음 계획 |
+
+### 11.17 v3 부록 C 대비
+
+| v3 | v4 |
+|---|---|
+| 풀(58–68), `main` 단일성(47–50), 랜덤 개시(28), 인바운드 예약·만료(9–12), 플랜 항목(56–57), `reserve.prompt` 경로(24–26) | 삭제. 개체가 없어짐 |
+| `finish()` 순서(10, 41, 93) | 11.3 `select` 순서 |
+| 백오프 self 예약(33, 36–37) | `turn_retry_at`(11.10) |
+| 흐름 중 정리 실행(71) | 반대로 바뀜: 정리는 흐름이 닫힌 뒤에만, 다음 흐름 전에 끝남(16) |
+| 흐름 중 블랙아웃 끝나면 플랜(45) | 흐름이 닫힌 뒤(74, 75) |
+| 그 외 | 의미를 v4 개체로 옮겨 유지 |
+
+이 목록을 쓰며 의사코드를 따라가다 찾아 §9에 반영한 것:
+
+| # | 결함 | 수정 |
+|---|---|---|
+| L1 | 다음 기한에 이미 지난 값(흐름 중 밀린 계획의 `MAX(now, …)`, 백오프·보류에 막힌 디바운스)이 들어가 타이머가 즉시 발화하는 바쁜 루프 | `now`보다 뒤인 값만 조준(§9.1) |
+| L2 | 계획이 `plan` 예약을 교체하면서 목표에 걸린 예약이 사라져도 I3 보정이 없음 | `Plan` tx 끝에 `settle()`(§9.6) |
+| L3 | 흐름 밖 `pending`이 디바운스 중인데 `fired` 개시 예약이 있으면 개시 턴이 쓰다 만 입력을 흡수해 답함 | 디바운스 중이면 1~3 모두 대기(§9.3) |
+| L4 | v4 리셋이 정의되지 않음. v3 규칙대로 예약만 지우면 활성 목표가 예약 없이 남아 I3가 깨짐 | §9.11. 활성 목표 `dropped('reset')` |
+| L5 | AI 개시 턴에서 곧 지워질 `x`가 I6 집계에 들어가 상한이 1 줄어듦 | `x`는 지운 것으로 봄(§9.5) |
+| L6 | 개입 취소(메시지 0개 + `end`)가 도구 효과를 버려 "15시에 다시"로 미룰 수 없음 | 취소에서도 도구 효과 반영(§9.4) |
