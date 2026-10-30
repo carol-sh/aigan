@@ -100,7 +100,7 @@ function fitOpenings(
     const unknownGoalIds = opening.goalIds.filter((id) => !activeGoalIds.has(id));
     if (unknownGoalIds.length > 0) {
       ctx.logger.info(
-        `계획 예약 "${opening.intent}"에서 활성 목표가 아닌 ${unknownGoalIds.map((id) => `#${id}`).join(", ")}를 뺐다`,
+        `계획 예약에서 활성 목표가 아닌 것을 뺐다(${unknownGoalIds.map((id) => `#${id}`).join(", ")}): ${describeOpening(ctx, opening)}`,
       );
     }
     fitted.push({
@@ -121,6 +121,9 @@ function logDroppedOpening(
   opening: PlanOutput["openings"][number],
   reason: string,
 ): void {
-  const at = formatLocalTime(opening.at, ctx.config.timezone);
-  ctx.logger.info(`계획 예약 ${at} "${opening.intent}"를 버렸다: ${reason}`);
+  ctx.logger.info(`계획 예약을 버렸다(${reason}): ${describeOpening(ctx, opening)}`);
+}
+
+function describeOpening(ctx: HarnessContext, opening: PlanOutput["openings"][number]): string {
+  return `${formatLocalTime(opening.at, ctx.config.timezone)} ${opening.intent}`;
 }

@@ -267,7 +267,29 @@ test("111a: 흐름도 정리 대기도 없으면 날 넘김은 보류 중에 돌
   assert.deepEqual(app.llmTasks.slice(3), ["10-31 00:00 plan"]);
 });
 
-test("111b: 보류 중 블랙아웃에 온 메시지는 흐름 밖 판정 대기로 남아 해제·블랙아웃 끝 뒤에 판정된다", async (t) => {
+test("계획: 상한에 닿은 뒤 밀린 계획은 게이트가 보류에 넣고 시도로 세지 않으며, 풀린 뒤 바로 돈다", async (t) => {
+  const app = await startApp(t, {
+    at: "2026-10-30 22:00",
+    config: { blackout: "23:00-07:00", ...ONE_TURN_A_DAY },
+  });
+  await spendTheOnlyTurnCall(app);
+
+  await app.advanceTo("23:01");
+  assert.deepEqual(holdState(app), {
+    hold_reason: "daily_limit",
+    hold_since: app.at("23:00").toISO(),
+    hold_until: app.at("2026-10-31 00:00").toISO(),
+  });
+  assert.deepEqual(app.row("SELECT plan_attempts, plan_retry_at FROM harness_state"), {
+    plan_attempts: 0,
+    plan_retry_at: null,
+  });
+
+  await app.advanceTo("2026-10-31 00:01");
+  assert.deepEqual(app.llmTasks.slice(2), ["10-31 00:00 plan"]);
+});
+
+test("111b:보류 중 블랙아웃에 온 메시지는 흐름 밖 판정 대기로 남아 해제·블랙아웃 끝 뒤에 판정된다", async (t) => {
   const app = await startApp(t, {
     at: "2026-10-30 22:00",
     config: { blackout: "23:00-07:00", ...ONE_TURN_A_DAY },
