@@ -9,6 +9,7 @@ import type { ToolBox } from "./tools/tool-box.ts";
 import { createTurnTools } from "./tools/turn-tools.ts";
 import { deleteMessagesArrivedDuringIo, keepTypingDuring } from "./telegram-during-io.ts";
 import { commitTurn, hasOpeningTurnRunIntoBlackout } from "./turn-commit.ts";
+import { failTurn, recordTurnAttempt } from "./turn-failure.ts";
 
 export interface TurnOutput {
   messages: string[];
@@ -38,6 +39,7 @@ export async function runTurn(
   decider: TurnDecider,
   task: TurnTask,
 ): Promise<void> {
+  await recordTurnAttempt(ctx);
   const planDate = ctx.calendar.currentPlanDate(ctx.clock.now());
   const input = assembleTurnInput(ctx, task, planDate);
   const lastMessageIdBeforeIo = ctx.messages.latestMessageId();
@@ -52,8 +54,13 @@ export async function runTurn(
 
   const decide = () =>
     decideOutput(ctx, conversation, { task, planDate, changes, consumedOpeningId });
-  const output = isInFlowTurn(task) ? await keepTypingDuring(ctx, decide) : await decide();
-  if (output === undefined) return;
+  let output: TurnOutput;
+  try {
+    output = isInFlowTurn(task) ? await keepTypingDuring(ctx, decide) : await decide();
+  } catch (error) {
+    await failTurn(ctx, { task, lastSeenUserMessageId: input.lastShownUserMessageId, error });
+    return;
+  }
 
   const busyMessageIds = willSpeak(ctx, task, output)
     ? await deleteMessagesArrivedDuringIo(ctx, lastMessageIdBeforeIo)
@@ -75,19 +82,13 @@ interface TurnInProgress {
   consumedOpeningId: number | undefined;
 }
 
-/** 결정하고 필요하면 한 번 되묻는다. 결정이 실패하면 아무것도 바꾸지 않고 `undefined`를 낸다. */
+/** 결정하고 필요하면 한 번 되묻는다. 되묻기가 실패하면 첫 출력을 쓰고, 결정이 실패하면 던진다. */
 async function decideOutput(
   ctx: HarnessContext,
   conversation: TurnConversation,
   turn: TurnInProgress,
-): Promise<TurnOutput | undefined> {
-  let output: TurnOutput;
-  try {
-    output = await conversation.decide();
-  } catch (error) {
-    ctx.logger.warn(`턴(${turn.task.trigger})이 실패해 아무것도 바꾸지 않았다`, error);
-    return undefined;
-  }
+): Promise<TurnOutput> {
+  const output = await conversation.decide();
 
   const goalsWithoutNextCheck = leavesNoFlow(turn.task, output)
     ? findGoalsWithoutNextCheck(ctx, output.messages.length > 0 ? turn.changes : undefined, turn)

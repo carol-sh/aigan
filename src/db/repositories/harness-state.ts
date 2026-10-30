@@ -62,6 +62,36 @@ export class HarnessStateRepository {
       .run();
   }
 
+  recordTurnAttempt(retryAt: DateTime): void {
+    this.#db
+      .prepare(
+        "UPDATE harness_state SET failure_count = failure_count + 1, turn_retry_at = ? WHERE id = 1",
+      )
+      .run(toDbTime(retryAt));
+  }
+
+  /** 같은 트리거의 출력 실패면 이어 세고, 다른 트리거면 1부터 센다. 새 횟수를 돌려준다. */
+  countOutputFailure(triggerKey: string): number {
+    const row = this.#db
+      .prepare(
+        `UPDATE harness_state
+         SET output_fail_count = CASE WHEN output_fail_key = :triggerKey
+                                      THEN output_fail_count + 1 ELSE 1 END,
+             output_fail_key = :triggerKey
+         WHERE id = 1 RETURNING output_fail_count`,
+      )
+      .get({ triggerKey }) as { output_fail_count: number };
+    return row.output_fail_count;
+  }
+
+  clearOutputFailures(): void {
+    this.#db
+      .prepare(
+        "UPDATE harness_state SET output_fail_count = 0, output_fail_key = NULL WHERE id = 1",
+      )
+      .run();
+  }
+
   /** 요청 한 건을 센다. 날짜가 바뀌었으면 먼저 0으로 되돌린다. */
   countLlmRequest(localDate: string): void {
     this.#db

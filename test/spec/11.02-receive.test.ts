@@ -199,7 +199,7 @@ test("12g: 지운 뒤 커밋 전에 죽으면 DB에는 평소 메시지로 남�
   await app.advance({ seconds: 1 });
 
   await app.restart({ downFor: { seconds: 10 } });
-  await app.advance({ seconds: 20 });
+  await app.advance({ minutes: 10 });
 
   assert.equal(messageByContent(app, "아 잠깐").void_reason, null);
   assert.deepEqual(

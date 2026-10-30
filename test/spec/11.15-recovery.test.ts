@@ -16,7 +16,7 @@ test("113: 디바운스 대기 중에 재시작하면, 기한이 지났으면 �
   assert.equal(userTurn?.startedAt.toMillis(), app.at("10:00").plus({ seconds: 40 }).toMillis());
 });
 
-test("114: 턴 io 중에 죽으면 커밋 전이라 아무것도 바뀌지 않고 같은 작업을 다시 돈다", async (t) => {
+test("80, 114: 턴 io 중에 죽으면 아무것도 바뀌지 않고, 재시작 뒤 선기록한 turn_retry_at까지 기다렸다 같은 작업을 다시 돈다", async (t) => {
   const llm = new ScriptedLlm().onTurn(neverFinishes, (turn) => turn.say("응"));
   const app = await startApp(t, { llm });
   await app.user("안녕");
@@ -26,11 +26,14 @@ test("114: 턴 io 중에 죽으면 커밋 전이라 아무것도 바뀌지 않�
   ]);
 
   await app.restart({ downFor: { minutes: 1 } });
+  await app.advanceTo("10:10");
+  assert.equal(app.llmTasks.length, 2, "재시작 직후에는 다시 부르지 않는다");
 
+  await app.advance({ seconds: 20 });
   assert.deepEqual(app.llmTasks, [
     "10-30 10:00 plan",
     "10-30 10:00 turn:user",
-    "10-30 10:01 turn:user",
+    "10-30 10:10 turn:user",
   ]);
   assert.deepEqual(app.rows("SELECT triage FROM messages WHERE role = 'user'"), [
     { triage: "accepted" },

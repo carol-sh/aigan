@@ -228,7 +228,7 @@ function renderEvent(input: TurnInput, timezone: string): string[] {
   ];
 }
 
-function describeTrigger(task: TurnTask): string {
+export function describeTrigger(task: TurnTask): string {
   switch (task.trigger) {
     case "open":
       return `AI 개시(개시 예약 #${task.reservationId})`;
