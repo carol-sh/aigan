@@ -594,3 +594,4 @@ docs/plans/llm-executor.md          # 이 계획. docs/README.md에서 링크
 - **턴 실패**는 아직 "경고 후 버림"이다. 같은 실패가 반복되면 같은 작업을 바로 다시 고른다(턴 실패 단계에서 막는다).
   - 4단계에서 처리했다: 시도 선기록, `failTurn`, 트리거 포기, 운영자 알림. [`turn-failure.md`](turn-failure.md).
 - **계획**은 아직 가짜 핸들러다. `FakePlan`이 `plans` 행을 쓴다.
+  - 6단계에서 실행기로 옮겼다. [`plan.md`](plan.md).
