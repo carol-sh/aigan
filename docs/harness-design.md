@@ -424,7 +424,7 @@ LLM을 부를 수 없는 상태다. 사유는 셋이다.
 
 ### 6.7 구성
 
-- 스택: Node 24 + TypeScript(타입 제거 실행, `tsc`는 타입 검사만), SQLite(`node:sqlite`), grammY(텔레그램, 재시도 플러그인 없이 §6.4대로 처리), openai SDK 호환 클라이언트, luxon(시간대), zod(검증). 테스트는 `node:test`, 린트·포맷은 Biome. 마이그레이션은 SQL 파일과 `PRAGMA user_version`.
+- 스택: Node 24 + TypeScript(타입 제거 실행, `tsc`는 타입 검사만), SQLite(`node:sqlite`), grammY(텔레그램, 재시도 플러그인 없이 §6.4대로 처리), openai SDK 호환 클라이언트, luxon(시간대), zod(검증). 테스트는 `node:test`, 패키지 관리는 pnpm, 린트는 oxlint, 포맷은 oxfmt, 커밋 전 검사(`pnpm check`)는 lefthook. 마이그레이션은 SQL 파일과 `PRAGMA user_version`.
 - 설정은 단일 파일(`DATA_DIR/config`)이고 `KEY=value` 형식이다(`util.parseEnv`로 읽는다). 시작 시 zod로 검증한다. 바꾸려면 재시작한다. 키는 §9.9, 예시는 `examples/config.example`.
 - 시계·LLM·텔레그램은 인터페이스로 주입한다. 테스트는 가짜 시계·가짜 LLM·가짜 텔레그램과 메모리 SQLite(`:memory:`)로 돌아서 네트워크·API 키가 필요 없다.
 - 단일 인스턴스: `aigan.lock`. 두 번째 인스턴스와 실행 중 리셋은 잠금에서 거부된다.
