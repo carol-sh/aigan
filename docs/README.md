@@ -20,6 +20,7 @@
 | [`plans/turn-failure.md`](plans/turn-failure.md) | 4단계 턴 실패 구현 계획. 시도 선기록, `fail_turn`과 트리거 포기, 운영자 알림 |
 | [`plans/gate.md`](plans/gate.md) | 5단계 게이트 구현 계획. 일일 상한·잔액 확인, 보류 진입과 알림, 잔액 해제 |
 | [`plans/plan.md`](plans/plan.md) | 6단계 계획 실행기 구현 계획. 계획 입력·출력·커밋, 시각 범위와 상한, `plan-rules.md` 작성용 계약 |
+| [`plans/compact.md`](plans/compact.md) | 7단계 압축 구현 계획. 압축 범위와 `answered_upto_id`, 턴·정리 입력의 요약, `compact-rules.md` 작성용 계약 |
 
 ## 프롬프트 작성용
 
