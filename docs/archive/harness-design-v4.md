@@ -1,7 +1,7 @@
 # aigan 하네스 설계 v4 (골격)
 
 - 상태: 초안. 골격(§1–§7) 합의 후 DB 스키마(§8), 워커 의사코드(§9), 테스트 목록(§11)을 붙였다. 이어서 기억 설계(§5.6, §8.7)와 하루 규칙(원칙 7, §4.2 날 넘김)을 붙였다. 다음은 프롬프트 본문.
-- 참고: [`reference/harness-design-v3.md`](reference/harness-design-v3.md)(v3.0), [`archive/harness-trace.md`](archive/harness-trace.md). v3는 버리지 않고 실행 계층의 참고로 쓴다(§6).
+- 참고: [`harness-design-v3.md`](harness-design-v3.md)(v3.0), [`harness-trace.md`](harness-trace.md). v3는 버리지 않고 실행 계층의 참고로 쓴다(§6).
 
 ---
 
@@ -171,9 +171,9 @@ active ──▶ done      (AI가 완료로 판정)
 
 하루 동안 예약·흐름·목표가 생기고 사라지는 예시:
 
-![하루](figures/harness-day.png)
+![하루](../figures/harness-day.png)
 
-원본: [`harness-day.drawio`](figures/harness-day.drawio)
+원본: [`harness-day.drawio`](../figures/harness-day.drawio)
 
 ### 4.1 이벤트 표
 
@@ -227,9 +227,9 @@ active ──▶ done      (AI가 완료로 판정)
 
 JS 이벤트 루프를 본뜬 단일 루프.
 
-![실행 모델](figures/harness-exec-model.png)
+![실행 모델](../figures/harness-exec-model.png)
 
-원본: [`harness-exec-model.drawio`](figures/harness-exec-model.drawio)
+원본: [`harness-exec-model.drawio`](../figures/harness-exec-model.drawio)
 
 - **생산자**(텔레그램 폴러, 타이머, 시계, CLI)는 사실을 DB에 기록하고 루프를 깨우기만 한다. 상태 전이는 하지 않는다. 타이머는 "다음 기한" 하나만 조준하고, 관련 쓰기 직후 다시 맞춘다. 다음 기한 = `MIN(개시·이어가기 예약 at, 디바운스 만료, hold_until, 정리 재시도 시각, 계획 시점)`. 한 번에 `timer_max_sleep_sec`보다 오래 자지 않는다(§9.2).
 - **루프**는 한 번에 작업 하나만 처리한다.
@@ -412,9 +412,9 @@ prompts/
 
 v3 §3·§5를 기준으로 고친다. 시각은 모두 ISO 8601 + offset 문자열. `node:sqlite`, 외래 키 켬.
 
-![ERD](figures/harness-erd.png)
+![ERD](../figures/harness-erd.png)
 
-원본: [`harness-erd.drawio`](figures/harness-erd.drawio)
+원본: [`harness-erd.drawio`](../figures/harness-erd.drawio)
 
 ### 8.1 `harness_state` (행 1개)
 
@@ -895,7 +895,7 @@ v3의 `memory_file_max_chars`, `memory_max_files`는 뺀다. `max_lead_sec`도 �
 3. ~~시나리오 추적~~ → §11.16 통합 테스트로 흡수.
 4. ~~테스트 목록~~ → §11.
 5. ~~memory 설계~~ → §2.7, §5.3, §5.6, §8.7. E1(약점 축적), J2(무시한 메시지), K1(결과물 원문 보관 안 함) 반영.
-6. 프롬프트 본문(턴 규칙·상위 프롬프트·방침·계획·정리). 기준 장면은 [`prompting/harness-scenario-v4-evaluation.md`](prompting/harness-scenario-v4-evaluation.md)(의심하고 평가하는 Agent, E2·E3). K4(모은 것의 쓸모) 반영. 하루 규칙(원칙 7) 때문에 프롬프트가 맡을 것:
+6. 프롬프트 본문(턴 규칙·상위 프롬프트·방침·계획·정리). 기준 장면은 [`prompting/harness-scenario-v4-evaluation.md`](../prompting/harness-scenario-v4-evaluation.md)(의심하고 평가하는 Agent, E2·E3). K4(모은 것의 쓸모) 반영. 하루 규칙(원칙 7) 때문에 프롬프트가 맡을 것:
    - 턴 규칙: 늦은 시각에 만든 목표는 그날 끝까지 시간이 짧다. 남은 시간(이벤트 블록)을 보고 만들지 말지, 얼마나 작게 만들지 정한다. 밤을 넘기는 약속은 하지 않는다(예약이 거부된다). 다음 날 다시 다룰 것은 말로 남긴다.
    - 정리 규칙: 진행 메모는 다음 날로 넘어가지 않으므로, 다음 날 이어야 할 것(재도전할 유형, 읽은 쪽수)을 기억에 옮긴다.
    - 상위 프롬프트: `expired` 목표(손대지 못함)와 `failed` 목표(해 봤는데 실패)를 구분해 다음 날 배치에 쓴다.
