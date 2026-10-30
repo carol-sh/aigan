@@ -54,7 +54,7 @@ test("102: 오래 다운됐다 재시작하면 낡은 outbox는 보내지 않고
   ]);
 });
 
-test("103: 403이면 남은 outbox를 모두 undelivered로 두고 blocked 보류에 들어간다", async (t) => {
+test("103: 403이면 남은 outbox를 모두 undelivered로 두고 blocked 보류에 들어간다. 진입 알림은 로그에만 남는다", async (t) => {
   const app = await startApp(t, { llm: replyingWith("하나", "둘") });
   app.telegram.failNextSends(new TelegramError(403, "bot was blocked by the user"));
 
@@ -69,6 +69,12 @@ test("103: 403이면 남은 outbox를 모두 undelivered로 두고 blocked 보�
     hold_since: app.at("10:00").plus({ seconds: 20 }).toISO(),
     hold_until: null,
   });
+  assert.deepEqual(app.telegram.alerts, []);
+  assert.ok(
+    app.logger.lines.includes(
+      "warn 운영자 알림: 사용자가 봇을 차단해 보류에 들어간다. 사용자가 다시 메시지를 보내면 풀린다.",
+    ),
+  );
 });
 
 test("104: blocked 중 사용자 메시지가 오면 보류를 풀고 재개한다", async (t) => {

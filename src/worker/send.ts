@@ -1,7 +1,7 @@
-import { inTransaction } from "../db/transaction.ts";
 import { TelegramError } from "../ports.ts";
 import { sleep } from "../time.ts";
 import type { HarnessContext } from "./context.ts";
+import { enterHold } from "./hold.ts";
 
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
 const MAX_SEND_ATTEMPTS = 3;
@@ -14,7 +14,7 @@ export async function sendOutbox(ctx: HarnessContext): Promise<void> {
   for (const message of ctx.messages.findOutbox()) {
     const outcome = await sender.deliver(message.content);
     if (outcome === "blockedByUser") {
-      enterBlockedHold(ctx);
+      await enterBlockedHold(ctx);
       return;
     }
     if (outcome === "delivered") ctx.messages.markSent(message.id, ctx.clock.now());
@@ -42,14 +42,11 @@ export function splitForTelegram(text: string, limit = TELEGRAM_MESSAGE_LIMIT): 
   return chunks;
 }
 
-function enterBlockedHold(ctx: HarnessContext): void {
-  const voided = inTransaction(ctx.db, () => {
-    ctx.harnessState.enterHold("blocked", ctx.clock.now(), null);
-    return ctx.messages.markAllOutboxUndelivered();
-  });
-  ctx.logger.warn(
-    `사용자가 봇을 차단했다. 보낼 메시지 ${voided}개를 버리고 보류(blocked)에 들어간다`,
-  );
+/** 버리기와 보류 사이에 죽어도 다음 전송이 같은 403을 받아 보류에 들어간다. */
+async function enterBlockedHold(ctx: HarnessContext): Promise<void> {
+  const voided = ctx.messages.markAllOutboxUndelivered();
+  ctx.logger.warn(`사용자가 봇을 차단했다. 보낼 메시지 ${voided}개를 버린다`);
+  await enterHold(ctx, { reason: "blocked" });
 }
 
 class PacedSender {
