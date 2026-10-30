@@ -135,7 +135,7 @@ export class TestApp {
     return first;
   }
 
-  /** 아직 실제 경로로 만들 수 없는 상태(턴 백오프, 보류 등)를 심는다. 실제 경로가 생기면 그것으로 바꾼다. */
+  /** 실제 경로로 만들기 번거로운 상태(턴 백오프 등)를 심는다. */
   plant(sql: string, ...params: (string | number | null)[]): void {
     this.harness.ctx.db.prepare(sql).run(...params);
   }

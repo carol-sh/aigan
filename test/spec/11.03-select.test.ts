@@ -206,20 +206,20 @@ test("19: 턴 백오프 중이면 디바운스가 지난 판정 대기가 있어
 });
 
 test("20: 보류 중이면 디바운스가 지난 메시지가 있어도 다음 기한은 hold_until이다 (L1)", async (t) => {
-  const app = await startApp(t, { config: { timer_max_sleep_sec: ONE_DAY_SEC } });
-  app.plant(
-    "UPDATE harness_state SET hold_reason = 'daily_limit', hold_since = ?, hold_until = ?, daily_calls_date = '2026-10-30'",
-    app.at("10:00").toISO(),
-    app.at("2026-10-30 23:30").toISO(),
-  );
+  const app = await startApp(t, {
+    // 블랙아웃 시작을 자정에서 떼어 놓아 hold_until(자정)과 구별한다.
+    config: { timer_max_sleep_sec: ONE_DAY_SEC, daily_call_limit: "1", blackout: "01:00-08:00" },
+  });
+  await app.user("첫 말");
+  await app.advance({ seconds: 20 });
   await app.user("안녕");
   await app.advance({ seconds: 20 });
 
   const wakeUps = await wakeUpsDuring(app, () => app.advanceTo("23:00"));
 
   assert.equal(wakeUps, 0);
-  assert.equal(sleepingUntil(app), "10-30 23:30:00");
-  assert.deepEqual(app.llmTasks, ["10-30 10:00 plan"]);
+  assert.equal(sleepingUntil(app), "10-31 00:00:00");
+  assert.deepEqual(app.llmTasks, ["10-30 10:00 plan", "10-30 10:00 turn:user"]);
 });
 
 test("21: 작업 중 wake()는 무시되고, 작업이 끝나면 그동안 와서 지우지 못한 메시지를 다음 작업으로 고른다", async (t) => {
@@ -247,17 +247,17 @@ test("21: 작업 중 wake()는 무시되고, 작업이 끝나면 그동안 와�
 });
 
 test("22: 기한 후보가 없는 blocked 보류에서는 timer_max_sleep_sec마다 깨어나 고르기만 한다", async (t) => {
-  const app = await startApp(t);
-  app.plant(
-    "UPDATE harness_state SET hold_reason = 'blocked', hold_since = ?",
-    app.at("10:00").toISO(),
-  );
+  const llm = new ScriptedLlm().onTurn((turn) => turn.say("응", { continueAfter: { hours: 1 } }));
+  const app = await startApp(t, { llm });
+  app.telegram.failNextSends(new TelegramError(403, "bot was blocked by the user"));
+  await app.user("안녕");
   await app.advance({ minutes: 1 });
+  assert.equal(app.row("SELECT hold_reason FROM harness_state").hold_reason, "blocked");
 
   const wakeUps = await wakeUpsDuring(app, () => app.advance({ minutes: 10 }));
 
   assert.equal(wakeUps, 10);
-  assert.deepEqual(app.llmTasks, ["10-30 10:00 plan"]);
+  assert.deepEqual(app.llmTasks, ["10-30 10:00 plan", "10-30 10:00 turn:user"]);
 });
 
 test("22a: 기한까지 깨어 있는 동안 기기가 절전해도 깨어난 뒤 timer_max_sleep_sec 안에 기한이 지난 작업을 한다", async (t) => {

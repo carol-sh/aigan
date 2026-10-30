@@ -1,6 +1,7 @@
 import type { DateTime } from "luxon";
 import { type TurnInput, assembleTurnInput } from "../llm/input/turn-input.ts";
 import type { PlanDate } from "../time.ts";
+import { holdIfOutOfBudget } from "./budget-gate.ts";
 import type { HarnessContext } from "./context.ts";
 import { hasTimeLeftForOpening } from "./reservation-times.ts";
 import type { TurnTask } from "./tasks.ts";
@@ -39,6 +40,7 @@ export async function runTurn(
   decider: TurnDecider,
   task: TurnTask,
 ): Promise<void> {
+  if (await holdIfOutOfBudget(ctx)) return;
   await recordTurnAttempt(ctx);
   const planDate = ctx.calendar.currentPlanDate(ctx.clock.now());
   const input = assembleTurnInput(ctx, task, planDate);

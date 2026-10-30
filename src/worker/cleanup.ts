@@ -1,5 +1,6 @@
 import { inTransaction } from "../db/transaction.ts";
 import { cleanupBackoffDelaySec } from "../time.ts";
+import { holdIfOutOfBudget } from "./budget-gate.ts";
 import type { HarnessContext } from "./context.ts";
 import { alertOperator } from "./operator-alert.ts";
 import type { CleanupTask } from "./tasks.ts";
@@ -27,6 +28,7 @@ export async function runCleanup(
     await giveUpCleanup(ctx, flow.id);
     return;
   }
+  if (await holdIfOutOfBudget(ctx)) return;
   const attempts = recordCleanupAttempt(ctx, flow.id, flow.cleanup_attempts + 1);
 
   const memory = MemoryChanges.load(ctx.memory);

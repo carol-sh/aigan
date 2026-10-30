@@ -11,6 +11,7 @@ import { recordIncomingMessage } from "../producers/poller.ts";
 import { loadPrompts } from "../prompts.ts";
 import { PlanCalendar } from "../time.ts";
 import type { HarnessContext } from "./context.ts";
+import { holdIfOutOfBudget } from "./budget-gate.ts";
 import { TaskLoop } from "./loop.ts";
 import { runCleanup } from "./cleanup.ts";
 import type { PlanTask } from "./tasks.ts";
@@ -62,7 +63,11 @@ export function boot(options: BootOptions): Harness {
   const loop = new TaskLoop(ctx, {
     turn: (task) => runTurn(ctx, turnDecider, task),
     cleanup: (task) => runCleanup(ctx, cleanupDecider, task),
-    plan: (task) => options.runPlan(ctx, task),
+    // 계획 단계에서 게이트를 runPlan 안으로 옮긴다.
+    plan: async (task) => {
+      if (await holdIfOutOfBudget(ctx)) return;
+      await options.runPlan(ctx, task);
+    },
   });
 
   return {
