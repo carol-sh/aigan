@@ -15,6 +15,7 @@
 |---|---|
 | [`notes/openai-adapter.md`](notes/openai-adapter.md) | `llm/` 구현용. OpenAI API 확인 결과(스파이크 대체), 실행기 구조, 가짜 클라이언트, 정본에 반영한 것 |
 | [`plans/skeleton.md`](plans/skeleton.md) | 뼈대(LLM 없는 전부) 구현 계획. 코드 작성 원칙, 정본 이름→코드 이름, e2e 테스트 전략 |
+| [`plans/flow-and-tools.md`](plans/flow-and-tools.md) | 2단계 흐름과 도구 구현 계획. 턴·정리의 io 밖 절반, 도구 검증, 각본 결정자로 하는 e2e |
 
 ## 프롬프트 작성용
 
