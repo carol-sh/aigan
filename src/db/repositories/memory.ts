@@ -10,6 +10,12 @@ export interface MemorySection {
   updated_by_flow_id: number;
 }
 
+export interface MemoryState {
+  content: string;
+  updated_at: string | null;
+  updated_by_flow_id: number | null;
+}
+
 export interface MemoryWrite {
   flowId: number;
   writtenAt: DateTime;
@@ -23,10 +29,13 @@ export class MemoryRepository {
   }
 
   readState(): string {
-    const row = this.#db.prepare("SELECT content FROM memory_state WHERE id = 1").get() as {
-      content: string;
-    };
-    return row.content;
+    return this.findState().content;
+  }
+
+  findState(): MemoryState {
+    return this.#db
+      .prepare("SELECT content, updated_at, updated_by_flow_id FROM memory_state WHERE id = 1")
+      .get() as unknown as MemoryState;
   }
 
   writeState(content: string, write: MemoryWrite): void {

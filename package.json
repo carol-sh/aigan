@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/main.ts serve",
+    "reset": "node --disable-warning=ExperimentalWarning src/main.ts reset",
+    "memory": "node --disable-warning=ExperimentalWarning src/main.ts memory",
     "typecheck": "tsc --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test 'test/**/*.test.ts'",
     "lint": "oxlint",
