@@ -14,12 +14,14 @@ import type { ToolResult } from "../../src/worker/tools/tool-box.ts";
 export type TurnScript = (turn: ScriptedTurn) => FinalAnswer | Promise<FinalAnswer>;
 export type CleanupScript = (cleanup: ScriptedCleanup) => unknown;
 export type PlanScript = (plan: ScriptedPlan) => FinalAnswer | Promise<FinalAnswer>;
+export type CompactScript = (compact: ScriptedCompaction) => FinalAnswer | Promise<FinalAnswer>;
 
 /** 각본 모델이 대화를 시작할 때마다 남기는 기록. 모델이 입력에서 읽은 것만 담는다. */
 export type ScriptedTask =
   | { kind: "turn"; trigger: TurnTask["trigger"]; reservationId?: number }
   | { kind: "cleanup" }
-  | { kind: "plan" };
+  | { kind: "plan" }
+  | { kind: "compact" };
 
 export interface LoggedTask {
   task: ScriptedTask;
@@ -55,6 +57,7 @@ export class ScriptedLlm implements ChatClient {
   readonly #reconsiderScripts: TurnScript[] = [];
   readonly #cleanupScripts: CleanupScript[] = [];
   readonly #planScripts: PlanScript[] = [];
+  readonly #compactScripts: CompactScript[] = [];
   #ctx: HarnessContext | undefined;
   #conversation: ScriptedConversation | undefined;
 
@@ -76,6 +79,11 @@ export class ScriptedLlm implements ChatClient {
 
   onPlan(...scripts: PlanScript[]): this {
     this.#planScripts.push(...scripts);
+    return this;
+  }
+
+  onCompact(...scripts: CompactScript[]): this {
+    this.#compactScripts.push(...scripts);
     return this;
   }
 
@@ -112,6 +120,15 @@ export class ScriptedLlm implements ChatClient {
   #startConversation(params: ChatCompletionCreateParamsNonStreaming): ScriptedConversation {
     const ctx = this.#ctx!;
     const reportProblem = (problem: string) => this.problems.push(problem);
+    if (kindOf(params) === "compact") {
+      this.#record(ctx, { kind: "compact" });
+      const script =
+        this.#compactScripts.shift() ??
+        ((compact: ScriptedCompaction) => compact.summarize("요약"));
+      return new ScriptedConversation(reportProblem, {
+        start: () => Promise.resolve(script(new ScriptedCompaction())),
+      });
+    }
     if (kindOf(params) === "plan") {
       this.#record(ctx, { kind: "plan" });
       const script = this.#planScripts.shift() ?? ((plan: ScriptedPlan) => plan.finishPlan());
@@ -368,6 +385,20 @@ export class ScriptedCleanup {
   }
 }
 
+export class ScriptedCompaction {
+  summarize(summary: string): FinalAnswer {
+    return answer({ summary });
+  }
+
+  fail(): never {
+    throw new ScriptedApiError("각본이 압축을 실패시켰다");
+  }
+
+  malformed(): FinalAnswer {
+    return { content: "요약" };
+  }
+}
+
 export interface ScriptedOpening {
   /** `HH:mm`이면 지금의 로컬 날짜로 채운다. */
   at: string;
@@ -431,9 +462,9 @@ export function inputSection(document: string, title: string): string[] {
   return lines.slice(start + 1, end === -1 ? undefined : end).filter((line) => line !== "");
 }
 
-type LlmKind = "turn" | "cleanup" | "plan";
+type LlmKind = "turn" | "cleanup" | "plan" | "compact";
 
-/** 턴만 `goal_create`를, 정리만 `state_write`를 받는다. 계획은 `memory_read` 하나뿐이다. */
+/** 턴만 `goal_create`를, 정리만 `state_write`를 받는다. 계획은 `memory_read` 하나뿐이고 압축은 도구가 없다. */
 function kindOf(params: ChatCompletionCreateParamsNonStreaming): LlmKind {
   const toolNames = (params.tools ?? []).map((tool) =>
     tool.type === "function" ? tool.function.name : "",
@@ -441,6 +472,7 @@ function kindOf(params: ChatCompletionCreateParamsNonStreaming): LlmKind {
   if (toolNames.includes("goal_create")) return "turn";
   if (toolNames.includes("state_write")) return "cleanup";
   if (toolNames.length === 1 && toolNames[0] === "memory_read") return "plan";
+  if (toolNames.length === 0) return "compact";
   throw new Error(`도구 목록으로 작업을 알 수 없다: ${toolNames.join(", ")}`);
 }
 

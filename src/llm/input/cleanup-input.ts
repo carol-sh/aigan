@@ -5,13 +5,21 @@ import type { Message } from "../../db/repositories/messages.ts";
 import { fromDbTime } from "../../time.ts";
 import type { HarnessContext } from "../../worker/context.ts";
 import { formatLocalTime } from "../../worker/reservation-times.ts";
-import { NONE, type TimeView, renderMemory, renderMessages, renderSection } from "./transcript.ts";
+import { countChars, viewCompactedConversation } from "../../worker/compact.ts";
+import {
+  type ConversationView,
+  NONE,
+  type TimeView,
+  renderConversation,
+  renderMemory,
+  renderSection,
+} from "./transcript.ts";
 
 export interface CleanupInput {
   flow: Flow;
   memory: { state: string; sectionTitles: string[] };
   goals: { goal: Goal; isInFlow: boolean }[];
-  messages: Message[];
+  conversation: ConversationView;
 }
 
 export function assembleCleanupInput(ctx: HarnessContext, flowId: number): CleanupInput {
@@ -25,8 +33,20 @@ export function assembleCleanupInput(ctx: HarnessContext, flowId: number): Clean
     goals: ctx.goals
       .findForCleanup(flow.id, flow.plan_date)
       .map(({ is_in_flow, ...goal }) => ({ goal, isInFlow: is_in_flow === 1 })),
-    messages: ctx.messages.findShownInFlow(flow.id),
+    conversation: chooseConversationForCleanup(flow, ctx.messages.findShownInFlow(flow.id), ctx),
   };
+}
+
+/** 압축이 버린 세부도 기록에는 필요하므로 원문을 준다. 원문이 너무 길 때만 턴과 같은 압축본으로 바꾼다. */
+function chooseConversationForCleanup(
+  flow: Flow,
+  shownMessages: Message[],
+  ctx: HarnessContext,
+): ConversationView {
+  if (countChars(shownMessages) <= ctx.config.cleanup_raw_max_chars) {
+    return { summary: undefined, messages: shownMessages };
+  }
+  return viewCompactedConversation(flow, shownMessages);
 }
 
 export function renderCleanupInput(
@@ -38,7 +58,7 @@ export function renderCleanupInput(
     renderSection("기억", renderMemory(input.memory.state, input.memory.sectionTitles)),
     renderSection("흐름", renderFlow(input.flow, view.timezone)),
     renderSection(`목표 (계획일 ${input.flow.plan_date})`, input.goals.map(renderGoal)),
-    renderSection("대화", renderMessages(input.messages, view)),
+    renderSection("대화", renderConversation(input.conversation, view)),
     renderSection("지금", [formatLocalTime(view.now, view.timezone)]),
   ].join("\n\n");
 

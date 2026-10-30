@@ -2,8 +2,10 @@ import type { DateTime } from "luxon";
 import { type TurnInput, assembleTurnInput } from "../llm/input/turn-input.ts";
 import type { PlanDate } from "../time.ts";
 import { holdIfOutOfBudget } from "./budget-gate.ts";
+import { type CompactDecider, compactOpenFlowIfLong } from "./compact.ts";
 import type { HarnessContext } from "./context.ts";
 import { hasTimeLeftForOpening } from "./reservation-times.ts";
+import { sendOutbox } from "./send.ts";
 import type { TurnTask } from "./tasks.ts";
 import { TurnChanges, type WorkingGoal } from "./tools/turn-changes.ts";
 import type { ToolBox } from "./tools/tool-box.ts";
@@ -35,9 +37,14 @@ export interface TurnConversation {
   reconsider(goalsWithoutNextCheck: WorkingGoal[]): Promise<TurnOutput>;
 }
 
+export interface TurnDeciders {
+  turn: TurnDecider;
+  compact: CompactDecider;
+}
+
 export async function runTurn(
   ctx: HarnessContext,
-  decider: TurnDecider,
+  deciders: TurnDeciders,
   task: TurnTask,
 ): Promise<void> {
   if (await holdIfOutOfBudget(ctx)) return;
@@ -47,7 +54,7 @@ export async function runTurn(
   const lastMessageIdBeforeIo = ctx.messages.latestMessageId();
   const consumedOpeningId = task.trigger === "open" ? task.reservationId : undefined;
   const changes = TurnChanges.load(ctx, { consumedOpeningId });
-  const conversation = decider.begin({
+  const conversation = deciders.turn.begin({
     task,
     planDate,
     tools: createTurnTools({ ctx, changes, planDate }),
@@ -75,6 +82,8 @@ export async function runTurn(
     changes,
     busyMessageIds,
   });
+  await sendOutbox(ctx);
+  await compactOpenFlowIfLong(ctx, deciders.compact);
 }
 
 interface TurnInProgress {

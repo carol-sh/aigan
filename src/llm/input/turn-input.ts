@@ -6,13 +6,16 @@ import type { JobPolicy, Prompts } from "../../prompts.ts";
 import { type PlanDate, fromDbTime } from "../../time.ts";
 import type { HarnessContext } from "../../worker/context.ts";
 import { formatLocalTime } from "../../worker/reservation-times.ts";
+import { viewCompactedConversation } from "../../worker/compact.ts";
 import type { TurnTask } from "../../worker/tasks.ts";
 import {
+  type ConversationView,
   NONE,
   type OpeningView,
   type TimeView,
   formatDuration,
   formatShortTime,
+  renderConversation,
   renderMemory,
   renderMessages,
   renderOpening,
@@ -28,7 +31,7 @@ export interface TurnInput {
   memory: { state: string; sectionTitles: string[] };
   planBody: string | undefined;
   previousFlowTail: { endedAt: DateTime; messages: Message[] } | undefined;
-  flowMessages: Message[];
+  flowConversation: ConversationView;
   activeGoals: { goal: Goal; openingIds: number[] }[];
   closedGoals: Goal[];
   openings: OpeningView[];
@@ -49,6 +52,9 @@ export function assembleTurnInput(
   const consumedOpening =
     task.trigger === "open" ? ctx.reservations.findById(task.reservationId) : undefined;
   const flowMessages = flow ? ctx.messages.findShownInFlow(flow.id) : [];
+  const flowConversation: ConversationView = flow
+    ? viewCompactedConversation(flow, flowMessages)
+    : { summary: undefined, messages: [] };
   const outsideMessages = ctx.messages.findShownOutsideFlow();
   const outside = keepLatest(outsideMessages, ctx.config.outside_messages_max);
   const openings = listOpeningsForTurn(ctx, consumedOpening?.id);
@@ -67,7 +73,7 @@ export function assembleTurnInput(
       ctx,
       tailBaseTime(flowMessages[0] ?? outsideMessages[0], now),
     ),
-    flowMessages,
+    flowConversation,
     activeGoals: ctx.goals.findActive().map((goal) => ({
       goal,
       openingIds: openings
@@ -79,7 +85,7 @@ export function assembleTurnInput(
     outside,
     openedIntent: (consumedOpening?.intent ?? flow?.opened_intent) || undefined,
     scheduledAt: consumedOpening && fromDbTime(consumedOpening.at),
-    lastShownUserMessageId: maxUserMessageId([...flowMessages, ...outside.messages]),
+    lastShownUserMessageId: maxUserMessageId([...flowConversation.messages, ...outside.messages]),
   };
 }
 
@@ -146,7 +152,7 @@ export function renderTurnInput(
     renderSection("기억", renderMemory(input.memory.state, input.memory.sectionTitles)),
     renderSection("오늘 계획", [input.planBody ?? "(계획 전)"]),
     renderSection("직전 흐름", renderPreviousFlowTail(input.previousFlowTail, view)),
-    renderSection("흐름 대화", renderMessages(input.flowMessages, view)),
+    renderSection("흐름 대화", renderConversation(input.flowConversation, view)),
     renderSection(
       "지금 활성 목표",
       input.activeGoals.map((goal) => renderActiveGoal(goal, timezone)),

@@ -5,6 +5,7 @@ import { acquireInstanceLock } from "../db/lock.ts";
 import { openDatabase } from "../db/open.ts";
 import { createRepositories } from "../db/repositories/index.ts";
 import { LlmCleanupDecider } from "../llm/cleanup-decider.ts";
+import { LlmCompactDecider } from "../llm/compact-decider.ts";
 import { LlmPlanDecider } from "../llm/plan-decider.ts";
 import { LlmTurnDecider } from "../llm/turn-decider.ts";
 import type { BalanceSource, ChatClient, Clock, Logger, Telegram } from "../ports.ts";
@@ -58,11 +59,11 @@ export function boot(options: BootOptions): Harness {
     telegram: options.telegram,
     logger: options.logger,
   };
-  const turnDecider = new LlmTurnDecider(ctx);
+  const turnDeciders = { turn: new LlmTurnDecider(ctx), compact: new LlmCompactDecider(ctx) };
   const cleanupDecider = new LlmCleanupDecider(ctx);
   const planDecider = new LlmPlanDecider(ctx);
   const loop = new TaskLoop(ctx, {
-    turn: (task) => runTurn(ctx, turnDecider, task),
+    turn: (task) => runTurn(ctx, turnDeciders, task),
     cleanup: (task) => runCleanup(ctx, cleanupDecider, task),
     plan: (task) => runPlan(ctx, planDecider, task),
   });

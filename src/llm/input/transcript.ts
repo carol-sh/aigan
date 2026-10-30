@@ -21,14 +21,30 @@ export function renderMessages(messages: Message[], view: TimeView): string[] {
   return messages.map((message) => renderMessage(message, view));
 }
 
+/** 압축된 흐름은 요약과 압축하지 않은 구간 원문으로 보인다. 압축한 적 없으면 원문 전체다. */
+export interface ConversationView {
+  summary: string | undefined;
+  messages: Message[];
+}
+
+export function renderConversation(conversation: ConversationView, view: TimeView): string[] {
+  const summary =
+    conversation.summary === undefined
+      ? []
+      : [indentFollowingLines(`[요약] ${conversation.summary}`)];
+  return [...summary, ...renderMessages(conversation.messages, view)];
+}
+
 function renderMessage(message: Message, view: TimeView): string {
   const speaker = message.role === "user" ? "사용자" : "나";
-  const [firstLine, ...restLines] = message.content.split("\n");
   const ignoredMark = message.triage === "ignored" ? " (무시됨)" : "";
   const time = formatShortTime(fromDbTime(message.ts), view);
-  return [`[${time}] ${speaker}: ${firstLine}`, ...restLines.map((line) => `    ${line}`)]
-    .join("\n")
-    .concat(ignoredMark);
+  return indentFollowingLines(`[${time}] ${speaker}: ${message.content}`).concat(ignoredMark);
+}
+
+function indentFollowingLines(text: string): string {
+  const [firstLine, ...restLines] = text.split("\n");
+  return [firstLine, ...restLines.map((line) => `    ${line}`)].join("\n");
 }
 
 export function formatShortTime(time: DateTime, { now, timezone }: TimeView): string {

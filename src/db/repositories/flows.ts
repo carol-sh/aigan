@@ -91,6 +91,12 @@ export class FlowRepository {
       .run(answeredUptoId, flowId);
   }
 
+  saveSummary(flowId: number, summary: string, compactedUntilId: number): void {
+    this.#db
+      .prepare("UPDATE flows SET summary = ?, compacted_until_id = ? WHERE id = ?")
+      .run(summary, compactedUntilId, flowId);
+  }
+
   close(
     flowId: number,
     reason: FlowEndReason,

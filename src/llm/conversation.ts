@@ -140,7 +140,7 @@ export class LlmConversation {
       messages: [...this.#messages],
       response_format: { type: "json_object" },
       ...(tools.length > 0 && { tools }),
-      ...(isForced && { tool_choice: "none" }),
+      ...(isForced && tools.length > 0 && { tool_choice: "none" }),
       ...(config.reasoning_effort !== undefined && {
         reasoning_effort:
           config.reasoning_effort as ChatCompletionCreateParamsNonStreaming["reasoning_effort"],

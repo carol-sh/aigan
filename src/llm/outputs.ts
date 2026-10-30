@@ -72,6 +72,15 @@ export function planOutputParser(timezone: string): OutputParser<PlanOutput> {
   };
 }
 
+/** 새 요약은 기존 요약을 교체한다. */
+export const parseCompactOutput: OutputParser<string> = (text) => {
+  const parsed = parseJsonObject(
+    text,
+    z.object({ summary: z.string().trim().min(1, "요약이 비었다") }),
+  );
+  return parsed.ok ? { ok: true, value: parsed.value.summary } : parsed;
+};
+
 function parseJsonObject<T>(text: string, schema: z.ZodType<T>): ParsedOutput<T> {
   let json: unknown;
   try {

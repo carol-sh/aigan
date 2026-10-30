@@ -21,6 +21,8 @@ export interface StartOptions {
   llm?: ScriptedLlm;
   /** 기본은 정리 규칙이 있어 흐름이 닫히면 정리가 돈다. false면 정리를 건너뛴다. */
   cleanupRules?: boolean;
+  /** 기본은 압축 규칙이 없어 압축하지 않는다. true면 흐름이 길어질 때 압축이 돈다. */
+  compactRules?: boolean;
   preparePrompts?: (promptsDir: string) => void;
 }
 
@@ -31,6 +33,9 @@ export async function startApp(t: TestContext, options: StartOptions = {}): Prom
   cpSync("examples/prompts", join(dataDir, "prompts"), { recursive: true });
   if (options.cleanupRules !== false) {
     writeFileSync(join(dataDir, "prompts", "cleanup-rules.md"), "기억에 남길 것을 정리한다.");
+  }
+  if (options.compactRules === true) {
+    writeFileSync(join(dataDir, "prompts", "compact-rules.md"), "긴 대화를 요약한다.");
   }
   options.preparePrompts?.(join(dataDir, "prompts"));
 
