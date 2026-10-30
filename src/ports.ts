@@ -16,6 +16,11 @@ export interface ChatClient {
   create(params: ChatCompletionCreateParamsNonStreaming): Promise<ChatCompletion>;
 }
 
+export interface BalanceSource {
+  /** 지금 잔액. 단위는 `balance_threshold`와 같다고 본다. */
+  fetchBalance(): Promise<number>;
+}
+
 export interface Telegram {
   sendMessage(text: string): Promise<void>;
   deleteMessage(messageId: number): Promise<void>;

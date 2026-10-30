@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Config } from "../config.ts";
 import type { Repositories } from "../db/repositories/index.ts";
-import type { ChatClient, Clock, Logger, Telegram } from "../ports.ts";
+import type { BalanceSource, ChatClient, Clock, Logger, Telegram } from "../ports.ts";
 import type { Prompts } from "../prompts.ts";
 import type { PlanCalendar } from "../time.ts";
 
@@ -12,6 +12,7 @@ export interface HarnessContext extends Repositories {
   calendar: PlanCalendar;
   clock: Clock;
   chat: ChatClient;
+  balance: BalanceSource;
   telegram: Telegram;
   logger: Logger;
 }

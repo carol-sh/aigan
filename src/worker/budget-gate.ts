@@ -13,7 +13,26 @@ export async function holdIfOutOfBudget(ctx: HarnessContext): Promise<boolean> {
     await enterHold(ctx, { reason: "daily_limit" });
     return true;
   }
+  if (ctx.config.provider !== "deepseek") return false;
+  const balance = await fetchBalanceOrUndefined(ctx);
+  if (balance !== undefined && balance < ctx.config.balance_threshold!) {
+    await enterHold(ctx, { reason: "balance", balance });
+    return true;
+  }
   return false;
+}
+
+/**
+ * 조회가 실패하면 통과시킨다. 잔액 API만 죽었을 때 대화가 멈추지 않게 하기 위해서다. LLM API도 함께
+ * 죽었다면 턴 실패의 백오프가 막으므로 비용이 새지 않는다.
+ */
+async function fetchBalanceOrUndefined(ctx: HarnessContext): Promise<number | undefined> {
+  try {
+    return await ctx.balance.fetchBalance();
+  } catch (error) {
+    ctx.logger.warn("잔액을 확인하지 못해 그대로 진행한다", error);
+    return undefined;
+  }
 }
 
 /** 날짜가 바뀌었으면 0으로 본다. 0으로 쓰는 것은 요청 직전의 집계가 한다. */

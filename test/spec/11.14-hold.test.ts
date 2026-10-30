@@ -135,6 +135,87 @@ test("87: 정리를 기다리는 중 보류에 들어가면 정리는 시도로 
   assert.deepEqual(app.llmTasks.slice(2), ["10-31 00:00 cleanup"]);
 });
 
+const DEEPSEEK = {
+  provider: "deepseek",
+  balance_threshold: "1",
+  balance_retry_sec: "600",
+};
+
+test("110: 잔액이 기준보다 적으면 보류하고 balance_retry_sec마다 다시 확인하다가, 회복하면 풀고 밀린 개시 턴을 그 예약으로 돌린다", async (t) => {
+  const llm = new ScriptedLlm()
+    .onPlan((plan) => plan.finishPlan({ openings: [{ at: "12:00", intent: "점심 확인" }] }))
+    .onTurn((turn) => turn.say("점심 먹었어?", { continueAfter: { hours: 1 } }));
+  const app = await startApp(t, { llm, config: DEEPSEEK });
+  app.balance.amount = 0.5;
+
+  await app.advanceTo("12:01");
+  assert.deepEqual(holdState(app), {
+    hold_reason: "balance",
+    hold_since: app.at("12:00").toISO(),
+    hold_until: app.at("12:10").toISO(),
+  });
+  assert.deepEqual(app.rows("SELECT id, state FROM reservations"), [{ id: 1, state: "fired" }]);
+
+  await app.advanceTo("12:11");
+  assert.equal(holdState(app).hold_until, app.at("12:20").toISO());
+
+  app.balance.amount = 5;
+  await app.advanceTo("12:21");
+  assert.equal(holdState(app).hold_reason, null);
+  assert.deepEqual(app.llmTasks.slice(1), ["10-30 12:20 turn:open#1"]);
+  assert.deepEqual(app.telegram.alerts, [
+    "잔액(0.5)이 기준(1)보다 적어 보류에 들어간다. 2026-10-30 12:10에 다시 확인한다.",
+  ]);
+});
+
+test("110a: openai는 잔액을 보지 않고, deepseek은 LLM 작업마다 한 번 확인한다", async (t) => {
+  const openai = await startApp(t);
+  await openai.user("안녕");
+  await openai.advance({ seconds: 20 });
+  assert.equal(openai.balance.fetchCount, 0);
+
+  const deepseek = await startApp(t, { config: DEEPSEEK });
+  await deepseek.user("안녕");
+  await deepseek.advance({ seconds: 20 });
+  assert.deepEqual(deepseek.llmTasks, ["10-30 10:00 plan", "10-30 10:00 turn:user"]);
+  assert.equal(deepseek.balance.fetchCount, 2);
+});
+
+test("110b: 게이트에서 잔액 조회가 실패하면 경고만 남기고 작업을 한다", async (t) => {
+  const app = await startApp(t, { config: DEEPSEEK });
+  app.balance.failNextFetches();
+
+  await app.user("안녕");
+  await app.advance({ seconds: 20 });
+
+  assert.deepEqual(app.llmTasks, ["10-30 10:00 plan", "10-30 10:00 turn:user"]);
+  assert.equal(holdState(app).hold_reason, null);
+  assert.ok(
+    app.logger.lines.some((line) => line.startsWith("warn 잔액을 확인하지 못해 그대로 진행한다")),
+  );
+});
+
+test("110c: 잔액 보류를 풀려고 확인할 때 조회가 실패하면 풀지 않고 balance_retry_sec 뒤에 다시 확인한다", async (t) => {
+  const app = await startApp(t, { config: DEEPSEEK });
+  app.balance.amount = 0.5;
+  await app.user("안녕");
+  await app.advance({ seconds: 20 });
+  assert.equal(holdState(app).hold_reason, "balance");
+
+  app.balance.amount = 5;
+  app.balance.failNextFetches();
+  await app.advanceTo("10:11");
+  assert.deepEqual(holdState(app), {
+    hold_reason: "balance",
+    hold_since: app.at("10:00").plus({ seconds: 20 }).toISO(),
+    hold_until: app.at("10:20").plus({ seconds: 20 }).toISO(),
+  });
+
+  await app.advanceTo("10:21");
+  assert.equal(holdState(app).hold_reason, null);
+  assert.deepEqual(app.llmTasks, ["10-30 10:00 plan", "10-30 10:20 turn:user"]);
+});
+
 test("111: 보류 중에도 블랙아웃 시작에 흐름을 닫고, 정리·날 넘김·계획은 해제 뒤에 돈다", async (t) => {
   const llm = new ScriptedLlm().onTurn(async (turn) => {
     await turn.createGoal({ title: "산책" });

@@ -6,7 +6,7 @@ import { openDatabase } from "../db/open.ts";
 import { createRepositories } from "../db/repositories/index.ts";
 import { LlmCleanupDecider } from "../llm/cleanup-decider.ts";
 import { LlmTurnDecider } from "../llm/turn-decider.ts";
-import type { ChatClient, Clock, Logger, Telegram } from "../ports.ts";
+import type { BalanceSource, ChatClient, Clock, Logger, Telegram } from "../ports.ts";
 import { recordIncomingMessage } from "../producers/poller.ts";
 import { loadPrompts } from "../prompts.ts";
 import { PlanCalendar } from "../time.ts";
@@ -23,6 +23,7 @@ export interface BootOptions {
   telegram: Telegram;
   logger: Logger;
   chat: ChatClient;
+  balance: BalanceSource;
   /** 계획은 아직 LLM 실행기로 옮기지 않아 작업 통째로 받는다. */
   runPlan(ctx: HarnessContext, task: PlanTask): Promise<void>;
 }
@@ -55,6 +56,7 @@ export function boot(options: BootOptions): Harness {
     calendar: PlanCalendar.fromConfig(config),
     clock: options.clock,
     chat: options.chat,
+    balance: options.balance,
     telegram: options.telegram,
     logger: options.logger,
   };

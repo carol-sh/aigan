@@ -6,6 +6,7 @@ import { Duration, type DurationLike } from "luxon";
 import type { Update } from "grammy/types";
 import { type Harness, boot } from "../src/worker/boot.ts";
 import { type ConfigOverrides, testConfigText } from "./fakes/config.ts";
+import { FakeBalance } from "./fakes/balance.ts";
 import { FakeClock, flushAsyncWork } from "./fakes/clock.ts";
 import { ScriptedLlm, parseLocalTime } from "./fakes/scripted-llm.ts";
 import { MemoryLogger } from "./fakes/logger.ts";
@@ -23,7 +24,7 @@ export interface StartOptions {
   preparePrompts?: (promptsDir: string) => void;
 }
 
-/** 임시 DATA_DIR로 실제 부팅을 하고 루프를 돌린다. 바깥 경계(시계·텔레그램·LLM 클라이언트·계획)만 가짜다. */
+/** 임시 DATA_DIR로 실제 부팅을 하고 루프를 돌린다. 바깥 경계(시계·텔레그램·LLM 클라이언트·잔액·계획)만 가짜다. */
 export async function startApp(t: TestContext, options: StartOptions = {}): Promise<TestApp> {
   const dataDir = mkdtempSync(join(tmpdir(), "aigan-"));
   writeFileSync(join(dataDir, "config"), testConfigText({ timezone: TIMEZONE, ...options.config }));
@@ -45,6 +46,7 @@ export class TestApp {
   readonly clock: FakeClock;
   readonly llm: ScriptedLlm;
   readonly telegram = new FakeTelegram();
+  readonly balance = new FakeBalance();
   readonly logger = new MemoryLogger();
   #harness: Harness | undefined;
 
@@ -66,6 +68,7 @@ export class TestApp {
       telegram: this.telegram,
       logger: this.logger,
       chat: this.llm,
+      balance: this.balance,
       runPlan: (ctx, task) => this.llm.runPlan(ctx, task),
     });
     this.llm.attach(this.#harness.ctx);

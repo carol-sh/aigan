@@ -34,7 +34,7 @@ function describeHoldEntry(ctx: HarnessContext, entry: HoldEntry, until: DateTim
 export async function checkHoldRecovery(ctx: HarnessContext): Promise<void> {
   const state = ctx.harnessState.get();
   const now = ctx.clock.now();
-  if (!isHoldRecovered(ctx, state, now)) {
+  if (!(await isHoldRecovered(ctx, state, now))) {
     ctx.harnessState.postponeHoldCheck(nextHoldCheckAt(ctx, state.hold_reason, now));
     return;
   }
@@ -43,7 +43,11 @@ export async function checkHoldRecovery(ctx: HarnessContext): Promise<void> {
   await resumePendingWork(ctx);
 }
 
-function isHoldRecovered(ctx: HarnessContext, state: HarnessState, now: DateTime): boolean {
+async function isHoldRecovered(
+  ctx: HarnessContext,
+  state: HarnessState,
+  now: DateTime,
+): Promise<boolean> {
   switch (state.hold_reason) {
     case "blocked":
       return (
@@ -52,9 +56,19 @@ function isHoldRecovered(ctx: HarnessContext, state: HarnessState, now: DateTime
     case "daily_limit":
       return state.daily_calls_date !== ctx.calendar.localDate(now);
     case "balance":
-      return false;
+      return hasBalanceRecovered(ctx);
     case null:
       return true;
+  }
+}
+
+/** 조회가 실패하면 회복하지 않은 것으로 본다. 여기서 풀면 회복을 모른 채 호출이 나간다. */
+async function hasBalanceRecovered(ctx: HarnessContext): Promise<boolean> {
+  try {
+    return (await ctx.balance.fetchBalance()) >= ctx.config.balance_threshold!;
+  } catch (error) {
+    ctx.logger.warn("잔액을 확인하지 못해 보류를 이어 간다", error);
+    return false;
   }
 }
 
