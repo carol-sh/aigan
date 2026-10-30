@@ -18,6 +18,8 @@ export interface StartOptions {
   at?: string;
   config?: ConfigOverrides;
   llm?: ScriptedLlm;
+  /** 기본은 정리 규칙이 있어 흐름이 닫히면 정리가 돈다. false면 정리를 건너뛴다. */
+  cleanupRules?: boolean;
   preparePrompts?: (promptsDir: string) => void;
 }
 
@@ -26,6 +28,9 @@ export async function startApp(t: TestContext, options: StartOptions = {}): Prom
   const dataDir = mkdtempSync(join(tmpdir(), "aigan-"));
   writeFileSync(join(dataDir, "config"), testConfigText({ timezone: TIMEZONE, ...options.config }));
   cpSync("examples/prompts", join(dataDir, "prompts"), { recursive: true });
+  if (options.cleanupRules !== false) {
+    writeFileSync(join(dataDir, "prompts", "cleanup-rules.md"), "기억에 남길 것을 정리한다.");
+  }
   options.preparePrompts?.(join(dataDir, "prompts"));
 
   const clock = new FakeClock(parseLocalTime(options.at ?? "2026-10-30 10:00", TIMEZONE));
@@ -101,16 +106,24 @@ export class TestApp {
     return parseLocalTime(localTime, TIMEZONE, this.clock.now());
   }
 
-  /** LLM 작업 기록을 `MM-dd HH:mm 종류[:트리거]`로. */
+  /** LLM 작업 기록을 `MM-dd HH:mm 종류[:트리거][#개시 예약 id]`로. */
   get llmTasks(): string[] {
     return this.llm.log.map(({ task, startedAt }) => {
-      const label = task.kind === "turn" ? `turn:${task.trigger}` : task.kind;
+      const label =
+        task.kind !== "turn"
+          ? task.kind
+          : task.trigger === "open"
+            ? `turn:open#${task.reservationId}`
+            : `turn:${task.trigger}`;
       return `${startedAt.setZone(TIMEZONE).toFormat("MM-dd HH:mm")} ${label}`;
     });
   }
 
   rows<T = Record<string, unknown>>(sql: string, ...params: (string | number | null)[]): T[] {
-    return this.harness.ctx.db.prepare(sql).all(...params) as T[];
+    return this.harness.ctx.db
+      .prepare(sql)
+      .all(...params)
+      .map((row) => ({ ...row }) as T);
   }
 
   row<T = Record<string, unknown>>(sql: string, ...params: (string | number | null)[]): T {

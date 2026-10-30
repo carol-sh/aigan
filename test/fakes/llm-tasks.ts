@@ -5,7 +5,7 @@ import { closeFlow, scheduleFollowUpsForUncoveredGoals } from "../../src/worker/
 import type { LlmTask, LlmTaskHandlers, TurnTask } from "../../src/worker/tasks.ts";
 import { cleanupBackoffDelaySec, turnBackoffDelaySec } from "../../src/time.ts";
 
-export type Script = (commit: FakeCommit) => void | Promise<void>;
+export type Script = (commit: FakeCommit) => unknown;
 
 export interface LoggedTask {
   task: LlmTask;
