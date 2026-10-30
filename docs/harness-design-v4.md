@@ -53,20 +53,20 @@ aigan은 알림이 아니라 **개입**을 한다. 적절한 일을 골라 시�
 하루 계획 (계획일당 1개, 참고용)
 ```
 
-### 2.1 행동 방침 (`policies`)
+### 2.1 행동 방침 (`jobs`)
 
-- 방침 하나가 파일 하나다: `prompts/policies/<id>.md`. 파일명이 `id`이고, frontmatter의 `description`(한두 줄 설명)과 본문으로 이뤄진다. 런타임에는 읽기만 한다.
+- 방침 하나가 파일 하나다: `prompts/jobs/<id>.md`. 파일명이 `id`이고, frontmatter의 `description`(한두 줄 설명)과 본문으로 이뤄진다. 런타임에는 읽기만 한다.
 - 필드: `id`, `description`, `prompt`(방침 본문). 빈도·시간대 같은 메타 필드는 두지 않는다.
 - **추가·수정·삭제는 파일을 넣거나 고친 뒤 재시작한다.** 다른 방침 파일이나 하네스 코드는 건드리지 않는다. 계획은 계획일당 한 번이라, 바뀐 방침이 계획에 반영되는 것은 다음 계획일부터다. 턴의 방침 목록에는 재시작 직후부터 보인다.
-- **LLM에는 본문 대신 목록(`id`·`description`)을 준다.** 방침이 늘어도 매 호출의 입력이 본문만큼 커지지 않게 하기 위해서다. 본문은 필요할 때만 들어간다: 턴이 `policy_read`로 열고(새 목표를 만들 때), 활성 목표는 자기 `policy_snapshot`을 함께 보인다(평가 기준).
+- **LLM에는 본문 대신 목록(`id`·`description`)을 준다.** 방침이 늘어도 매 호출의 입력이 본문만큼 커지지 않게 하기 위해서다. 본문은 필요할 때만 들어간다: 턴이 `job_read`로 열고(새 목표를 만들 때), 활성 목표는 자기 `job_snapshot`을 함께 보인다(평가 기준).
 - **상위 프롬프트**(방침 선정 규칙)가 별도로 있어 "어떤 방침을 언제 얼마나 자주"를 정한다. 상위 프롬프트는 특정 방침 `id`를 적지 않고 일반 규칙만 둔다. 계획은 `description`만 보므로, 빈도·시간대처럼 배치에 필요한 정보는 `description`에 쓴다("평일 저녁, 하루 한 번").
-- 방침 파일에서 사라진 `id`를 가리키는 목표는 그대로 살아 있다(목표는 생성 시점의 방침 본문을 `policy_snapshot`으로 복사해 둔다).
+- 방침 파일에서 사라진 `id`를 가리키는 목표는 그대로 살아 있다(목표는 생성 시점의 방침 본문을 `job_snapshot`으로 복사해 둔다).
 
 ### 2.2 목표 (`goals`)
 
 AI가 방침에서 만든 구체 과제. 여러 개가 동시에 살아 있을 수 있다.
 
-- 필드(개념): `policy_id`, `title`, `done_criteria`(완료 조건), `due_at`(선택, 비동기 목표의 마감), `progress`(AI가 갱신하는 진행 메모·서브태스크 계획), `state`, `end_reason`.
+- 필드(개념): `job_id`, `title`, `done_criteria`(완료 조건), `due_at`(선택, 비동기 목표의 마감), `progress`(AI가 갱신하는 진행 메모·서브태스크 계획), `state`, `end_reason`.
 - 상태:
 
 ```
@@ -222,9 +222,9 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | 항목 | 내용 |
 |---|---|
 | 계기 | 개시(AI·사용자), 이어가기, 흐름 내 사용자 메시지 |
-| 입력 | 턴 규칙 프롬프트, 방침 목록(`id`·`description`), 활성 목표(진행 메모, `policy_snapshot`, 그 목표에 걸린 개시 예약의 id·at·intent 포함), 현재 계획일에 종료된 목표(결과·사유), 오늘 계획, 흐름 대화, 직전 흐름 이후 흐름 밖 메시지, 이벤트 블록(계기·개시 예약의 `intent`·밀린(`fired`) 개시 예약 목록·현재 시각·블랙아웃까지 남은 시간), memory 슬롯(미정) |
+| 입력 | 턴 규칙 프롬프트, 방침 목록(`id`·`description`), 활성 목표(진행 메모, `job_snapshot`, 그 목표에 걸린 개시 예약의 id·at·intent 포함), 현재 계획일에 종료된 목표(결과·사유), 오늘 계획, 흐름 대화, 직전 흐름 이후 흐름 밖 메시지, 이벤트 블록(계기·개시 예약의 `intent`·밀린(`fired`) 개시 예약 목록·현재 시각·블랙아웃까지 남은 시간), memory 슬롯(미정) |
 | 출력 | 보낼 메시지(0개 이상), 다음(`continue at` \| `end`) |
-| 도구 | `policy_read`(id), `goal_create`, `goal_update`(진행 메모·마감), `goal_close`(done/failed/dropped + 사유), `open_reserve`(at, intent, goal_ids), `open_cancel` |
+| 도구 | `job_read`(id), `goal_create`, `goal_update`(진행 메모·마감), `goal_close`(done/failed/dropped + 사유), `open_reserve`(at, intent, goal_ids), `open_cancel` |
 
 - `continue at`이 무효(과거·너무 멂·누락)면 클램프한다(v3 규칙).
 - 이 턴으로 흐름이 없어지는데(`end`, 또는 개시 턴의 메시지 0개) 다음 확인이 없는 활성 목표가 남으면, 하네스가 그 목표를 알려 주고 한 번 되묻는다(§9.4). AI는 `open_reserve`로 시각을 잡거나 `goal_close`한다.
@@ -253,6 +253,31 @@ JS 이벤트 루프를 본뜬 단일 루프.
 
 - 출력은 스키마 검증(zod). 파싱 실패 시 1회 재시도 후 실패 처리(v3 백오프).
 - LLM 호출 직전 보류 게이트(v3).
+
+### 5.5 프롬프트 파일
+
+```
+prompts/
+├── persona.md        # 누구인가: 말투, 압박 수위, 의심하는 태도
+├── turn-rules.md     # 하네스를 어떻게 쓰나: 출력·도구·예약 규칙
+├── plan-rules.md     # 상위 프롬프트: 방침 선정·빈도·배치의 일반 규칙
+├── cleanup-rules.md  # 흐름이 닫힌 뒤 memory에 무엇을 남기나
+├── compact-rules.md  # 긴 대화 요약
+└── jobs/
+    └── <id>.md       # 방침. frontmatter description + 본문(§2.1)
+```
+
+| 파일 | 필수 | 턴 | 계획 | 정리 | 없으면 |
+|---|---|---|---|---|---|
+| `persona.md` | 선택 | 통째로 | - | memory 설계 때 정함 | 건너뜀 |
+| `turn-rules.md` | 필수 | 통째로 | - | - | 시작 실패 |
+| `plan-rules.md` | 필수 | - | 통째로 | - | 시작 실패. 없으면 AI가 먼저 말을 걸 일이 생기지 않는다 |
+| `cleanup-rules.md` | 선택 | - | - | 통째로 | 정리 `skipped` |
+| `compact-rules.md` | 선택 | 압축 호출 | | | 압축 안 함 |
+| `jobs/*.md` | 1개 이상 | 목록 + `job_read` + 활성 목표의 `job_snapshot` | 목록 | - | 시작 실패 |
+
+- `persona.md`와 `turn-rules.md`를 나누는 이유: 고치는 계기가 다르다. `turn-rules.md`는 하네스 계약(출력 스키마, 원칙 6의 "미루려면 한 줄이라도 말하고 예약", 되묻기 대응)을 따르므로 하네스가 바뀔 때 고친다. `persona.md`는 사용자가 성격을 다듬을 때 고친다.
+- v3 대비: `call-rules.md` → `turn-rules.md`. v3의 `jobs/*.md`는 예약이 가리키는 프롬프트였고, v4의 `jobs/<id>.md`는 목표를 만드는 방침이다. v3의 `inbound_prompt`(사용자 개시 흐름 전용 job)는 없앤다. 사용자 개시도 턴이라 `turn-rules.md`가 다룬다.
 
 ---
 
@@ -295,7 +320,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | memory(장기 기억) | 나중에 논의 | 턴·계획 입력의 memory 슬롯, 정리 작업 |
 | 완료 판정 기준 | 프롬프트 | `goal_close` 도구와 사유 |
 | 압박 수위·포기 시점 | 프롬프트 | 이어가기 예약 간격, `goal_close(failed/dropped)` |
-| 프롬프트 본문(턴 규칙·상위 프롬프트·방침) | 나중에 작성. 방침은 사용자가 직접 쓰고 추가한다 | `prompts/` 아래 파일. 방침은 `prompts/policies/<id>.md`(§2.1) |
+| 프롬프트 본문(턴 규칙·상위 프롬프트·방침) | 나중에 작성. 방침은 사용자가 직접 쓰고 추가한다 | §5.5 |
 | 수신 판정 경량 호출 분리 | 비용 보고 나서 | §4.4 |
 | AI 개시 흐름 사이 간격 | 하네스 최소 간격 없음. 연속 개입의 빈도는 프롬프트가 정하고, 문제가 되면 서버를 멈추고 프롬프트를 고친다 | 밀린 개입 정보(§4.2) |
 | 예산 소진(일일 상한·잔액) | 복구 불가능한 장애로 본다. v3 보류 그대로(사용자 응답 포함 전부 멈춤), 별도 완화 없음 | v3 보류·운영자 알림 |
@@ -333,8 +358,8 @@ v3에서 뺀 것: `current_flow_id`(열린 흐름은 `flows`에서 파생, I1은
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
 | `id` | INTEGER PK | |
-| `policy_id` | TEXT | 방침 파일의 id. 파일에서 사라져도 유지 |
-| `policy_snapshot` | TEXT | 생성 시점 방침 본문 복사(§2.1). 하네스가 채운다 |
+| `job_id` | TEXT | 방침 파일의 id. 파일에서 사라져도 유지 |
+| `job_snapshot` | TEXT | 생성 시점 방침 본문 복사(§2.1). 하네스가 채운다 |
 | `title`, `done_criteria` | TEXT | |
 | `due_at` | TEXT / NULL | |
 | `progress` | TEXT | 진행 메모. 빈 문자열로 시작 |
@@ -551,8 +576,8 @@ TurnTx는 도구 효과를 모으고, 이후 도구 라운드는 그 효과가 �
 
 | 도구 | 거부 조건 | 효과 |
 |---|---|---|
-| `policy_read` | 방침 id 없음 | 본문을 돌려준다. 상태를 바꾸지 않으므로 원칙 6과 무관 |
-| `goal_create` | 방침 id 없음, 활성 목표 ≥ `goal_max_active` | `active`, `policy_snapshot` 복사 |
+| `job_read` | 방침 id 없음 | 본문을 돌려준다. 상태를 바꾸지 않으므로 원칙 6과 무관 |
+| `goal_create` | 방침 id 없음, 활성 목표 ≥ `goal_max_active` | `active`, `job_snapshot` 복사 |
 | `goal_update` | 활성 목표가 아님 | `progress`·`due_at` 갱신 |
 | `goal_close` | 활성 목표가 아님 | `state`, `end_reason`, `closed_at`. 걸린 예약은 건드리지 않는다(사전 검사가 지운다) |
 | `open_reserve` | `goal_ids`에 활성이 아닌 것, I6 상한 | `kind='open'`, `source='turn'`, 클램프·블랙아웃 |
@@ -608,7 +633,7 @@ out = await llm(ctx)
 
 ### 9.8 부팅과 재개
 
-**`boot()`**: 설정 검증(방침 파일: `description` 없음·파일명이 id 형식이 아님이면 시작 실패) → 단일 인스턴스 잠금 → 마이그레이션 → 보류 중이 아니면 `resume()`.
+**`boot()`**: 설정 검증(§5.5의 필수 파일, 방침 파일의 `description`·파일명 형식. 어긋나면 시작 실패) → 단일 인스턴스 잠금 → 마이그레이션 → 보류 중이 아니면 `resume()`.
 
 **`resume()`** — 부팅과 보류 해제가 공유한다.
 
@@ -681,7 +706,7 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 |---|---|---|
 | 1 | 첫 실행 | 초기값. 계획 밀림이라 즉시 `Plan`, 계획이 낸 개시 예약 저장 |
 | 2 | 첫 계획이 예약 0개 | 다음 계획까지 AI가 먼저 말 걸지 않음. 사용자 메시지는 판정 |
-| 3 | 블랙아웃 설정 비었음 / 턴 규칙 프롬프트 없음 / 방침 파일에 `description` 없음 | 시작 실패 |
+| 3 | 블랙아웃 설정 비었음 / `turn-rules.md`·`plan-rules.md` 없음 / `jobs/`가 비었음 / 방침 파일에 `description` 없음 | 시작 실패 |
 | 3a | 방침 파일 추가 후 재시작 | 턴의 방침 목록에 바로 나옴. 계획은 다음 계획일부터 반영(재계획 없음) |
 | 4 | 두 번째 인스턴스 / 실행 중 `aigan reset` | 잠금 거부 |
 | 5 | `aigan reset` 후 시작 | 1번과 같은 첫 실행 상태(`daily_calls` 포함). 이전 DB·memory는 백업 폴더에 있음 (L4) |
@@ -760,9 +785,9 @@ v3 부록 C를 v4에 맞게 고쳤다. 각 행은 테스트 하나다. "L"로 �
 |---|---|---|
 | 49 | `goal_create`, 활성 목표 = `goal_max_active` | 거부, 턴 계속 |
 | 50 | `goal_create`, 없는 방침 id | 거부 |
-| 50a | `policy_read`, 없는 방침 id | 거부 |
-| 51 | `goal_create` 성공 | `policy_snapshot` 복사, `flow_goals` 기록. 이후 턴 입력에서 그 목표에 `policy_snapshot`이 보임 |
-| 51a | 턴·계획 입력 | 방침은 `id`·`description` 목록만. 본문은 `policy_read` 결과와 활성 목표의 `policy_snapshot`으로만 들어감 |
+| 50a | `job_read`, 없는 방침 id | 거부 |
+| 51 | `goal_create` 성공 | `job_snapshot` 복사, `flow_goals` 기록. 이후 턴 입력에서 그 목표에 `job_snapshot`이 보임 |
+| 51a | 턴·계획 입력 | 방침은 `id`·`description` 목록만. 본문은 `job_read` 결과와 활성 목표의 `job_snapshot`으로만 들어감 |
 | 52 | `goal_update`·`goal_close`, 비활성 목표 | 거부 |
 | 53 | `goal_close` | 걸린 예약은 남음. 발화 때 사전 검사가 지움 |
 | 54 | `open_reserve`, `goal_ids`에 비활성 목표 | 거부 |
