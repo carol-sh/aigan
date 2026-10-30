@@ -1,0 +1,191 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { ToolResult } from "../../src/worker/tools/tool-box.ts";
+import { type CleanupScript, ScriptedLlm } from "../fakes/llm-tasks.ts";
+import { type StartOptions, type TestApp, startApp } from "../rig.ts";
+
+const neverFinishes = () => new Promise<never>(() => {});
+
+/** 판정 턴이 한 줄 말하고 바로 끝내서, 닫힌 흐름의 정리가 각본대로 돈다. */
+async function startWithClosedFlow(
+  t: Parameters<typeof startApp>[0],
+  cleanups: CleanupScript[],
+  options: StartOptions = {},
+): Promise<TestApp> {
+  const llm = (options.llm ?? new ScriptedLlm())
+    .onTurn((turn) => turn.end("그래"))
+    .onCleanup(...cleanups);
+  const app = await startApp(t, { ...options, llm });
+  await app.user("오늘 끝");
+  await app.advance({ seconds: 20 });
+  return app;
+}
+
+function memory(app: TestApp) {
+  return {
+    state: app.row<{ content: string }>("SELECT content FROM memory_state").content,
+    sections: app.rows("SELECT title, content FROM memory_sections ORDER BY created_at, title"),
+  };
+}
+
+function cleanupStartedSeconds(app: TestApp): number[] {
+  const cleanups = app.llm.log.filter(({ task }) => task.kind === "cleanup");
+  const first = cleanups[0]?.startedAt;
+  return cleanups.map(({ startedAt }) => startedAt.diff(first!).as("seconds"));
+}
+
+function assertRejected(result: ToolResult | undefined, reason: RegExp): void {
+  assert.equal(result?.ok, false, `거부돼야 한다: ${JSON.stringify(result)}`);
+  if (result && !result.ok) assert.match(result.reason, reason);
+}
+
+test("83, 90d: 정리가 성공하면 기억 쓰기와 done이 함께 커밋된다", async (t) => {
+  const app = await startWithClosedFlow(t, [
+    (cleanup) => {
+      cleanup.use("state_write", { content: "오늘 일찍 마무리함" });
+      cleanup.use("memory_write", { title: "  습관  ", content: "저녁에 대화를 끝낸다" });
+    },
+  ]);
+
+  assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "done");
+  assert.deepEqual(memory(app), {
+    state: "오늘 일찍 마무리함",
+    sections: [{ title: "습관", content: "저녁에 대화를 끝낸다" }],
+  });
+  assert.deepEqual(app.row("SELECT updated_by_flow_id FROM memory_state"), {
+    updated_by_flow_id: 1,
+  });
+});
+
+test("84, 85: 정리 실패는 30초부터 두 배씩 300초까지 미루고, cleanup_max_attempts에 닿으면 failed로 두고 다음 작업으로 간다", async (t) => {
+  const fail: CleanupScript = (cleanup) => cleanup.fail();
+  const app = await startWithClosedFlow(t, Array(6).fill(fail), {
+    config: { cleanup_max_attempts: "6" },
+  });
+  await app.user("정리 기다리는 동안 한 말");
+
+  await app.advance({ minutes: 13 });
+
+  assert.deepEqual(cleanupStartedSeconds(app), [0, 30, 90, 210, 450, 750]);
+  assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "failed");
+  assert.equal(app.llmTasks.at(-1), "10-30 10:12 turn:user");
+});
+
+test("85a: 마지막 정리 시도의 io 중에 죽으면 재시작 뒤 호출 없이 failed로 둔다", async (t) => {
+  const app = await startWithClosedFlow(t, [neverFinishes], {
+    config: { cleanup_max_attempts: "1" },
+  });
+
+  await app.restart({ downFor: { minutes: 1 } });
+
+  assert.equal(cleanupStartedSeconds(app).length, 1);
+  assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "failed");
+});
+
+test("90: 정리에는 턴 도구를 주지 않는다", async (t) => {
+  const results: ToolResult[] = [];
+  await startWithClosedFlow(t, [
+    (cleanup) => {
+      results.push(cleanup.use("goal_create", { job_id: "sample", title: "x", done_criteria: "" }));
+      results.push(cleanup.use("open_reserve", { at: "2026-10-30 15:00", intent: "x" }));
+    },
+  ]);
+
+  for (const result of results) assertRejected(result, /쓸 수 없는 도구/);
+});
+
+test("90e: 정리 응답 뒤 커밋 전에 죽으면 기억은 그대로고, 재시작 뒤 cleanup_next_at에 다시 돌아 한 번만 반영한다", async (t) => {
+  const app = await startWithClosedFlow(t, [
+    async (cleanup) => {
+      cleanup.use("memory_write", { title: "습관", content: "첫 시도" });
+      await neverFinishes();
+    },
+    (cleanup) => {
+      cleanup.use("memory_write", { title: "습관", content: "두 번째 시도" });
+    },
+  ]);
+
+  await app.restart({ downFor: { seconds: 10 } });
+  assert.deepEqual(memory(app), { state: "", sections: [] });
+  assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "pending");
+  await app.advance({ seconds: 30 });
+
+  assert.deepEqual(cleanupStartedSeconds(app), [0, 30]);
+  assert.deepEqual(memory(app).sections, [{ title: "습관", content: "두 번째 시도" }]);
+});
+
+test("90f: 정리가 실패하면 그 시도의 기억 쓰기를 버린다", async (t) => {
+  const app = await startWithClosedFlow(t, [
+    (cleanup) => {
+      cleanup.use("state_write", { content: "반영되면 안 됨" });
+      cleanup.fail();
+    },
+  ]);
+
+  assert.deepEqual(memory(app), { state: "", sections: [] });
+  assert.equal(app.row("SELECT cleanup_attempts FROM flows").cleanup_attempts, 1);
+});
+
+test("90g: 상한을 넘거나 비었거나 제목이 잘못된 기억 쓰기는 이유를 담아 거부하고 정리는 계속된다", async (t) => {
+  const results: ToolResult[] = [];
+  const app = await startWithClosedFlow(
+    t,
+    [
+      (cleanup) => {
+        results.push(cleanup.use("state_write", { content: "가".repeat(11) }));
+        results.push(cleanup.use("memory_write", { title: "약점", content: "나".repeat(21) }));
+        results.push(cleanup.use("memory_write", { title: "약점", content: "  " }));
+        results.push(cleanup.use("memory_write", { title: "   ", content: "본문" }));
+        results.push(cleanup.use("memory_write", { title: "x".repeat(101), content: "본문" }));
+      },
+    ],
+    { config: { state_max_chars: "10", memory_section_max_chars: "20" } },
+  );
+
+  assertRejected(results[0], /10자까지다. 지금 11자/);
+  assertRejected(results[1], /20자까지다. 지금 21자/);
+  assertRejected(results[2], /비었다/);
+  assertRejected(results[3], /1–100자/);
+  assertRejected(results[4], /1–100자/);
+  assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "done");
+});
+
+test("90h: 칸이 memory_max_sections개면 새 칸은 거부하고, 기존 칸 쓰기와 지운 뒤 새 칸은 허용한다", async (t) => {
+  const results: ToolResult[] = [];
+  const app = await startWithClosedFlow(
+    t,
+    [
+      (cleanup) => {
+        cleanup.use("memory_write", { title: "약점", content: "1" });
+        cleanup.use("memory_write", { title: "습관", content: "2" });
+        results.push(cleanup.use("memory_write", { title: "성향", content: "3" }));
+        results.push(cleanup.use("memory_write", { title: "약점", content: "1 고침" }));
+        results.push(cleanup.use("memory_delete", { title: "습관" }));
+        results.push(cleanup.use("memory_write", { title: "성향", content: "3" }));
+      },
+    ],
+    { config: { memory_max_sections: "2" } },
+  );
+
+  assertRejected(results[0], /2개까지다/);
+  assert.deepEqual(results.slice(1), [{ ok: true }, { ok: true }, { ok: true }]);
+  assert.deepEqual(memory(app).sections, [
+    { title: "성향", content: "3" },
+    { title: "약점", content: "1 고침" },
+  ]);
+});
+
+test("90i: 같은 정리 안에서 쓴 칸은 memory_read로 바로 읽힌다", async (t) => {
+  const results: ToolResult[] = [];
+  await startWithClosedFlow(t, [
+    (cleanup) => {
+      cleanup.use("memory_write", { title: "습관", content: "아침형" });
+      results.push(cleanup.use("memory_read", { title: "습관" }));
+      cleanup.use("memory_delete", { title: "습관" });
+      results.push(cleanup.use("memory_read", { title: "습관" }));
+    },
+  ]);
+
+  assert.deepEqual(results[0], { ok: true, content: "아침형" });
+  assertRejected(results[1], /습관/);
+});
