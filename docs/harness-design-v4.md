@@ -303,6 +303,10 @@ JS 이벤트 루프를 본뜬 단일 루프.
 
 v3 §3·§5를 기준으로 고친다. 시각은 모두 ISO 8601 + offset 문자열. `node:sqlite`, 외래 키 켬.
 
+![ERD](harness-erd.png)
+
+원본: [`harness-erd.drawio`](harness-erd.drawio)
+
 ### 8.1 `harness_state` (행 1개)
 
 | 컬럼 | 타입 | 의미 |
