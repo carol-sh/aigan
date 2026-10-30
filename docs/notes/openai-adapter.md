@@ -17,12 +17,17 @@
 
 모델이 형식을 어긴 사례: 시각 필드에 `"아침"`이나 빈 문자열을 넣고, 필수 필드를 비웠다. 스파이크 프롬프트가 형식을 말하지 않아서다. 턴 규칙에 ISO 8601 형식(오프셋 포함)과 예시, 필수 여부를 적는다. 위반은 파싱 실패로 처리한다(§5.4).
 
-## 정본에 반영할 것
+## 정본에 반영한 것
 
 1. **LLM 포트는 SDK 모양 하나로 둔다.** `ChatClient { create(params): Promise<ChatCompletion> }`. 가짜는 completion을 각본으로 준다. 도구 라운드·강제 호출·재시도·`llm_calls` 기록이 실제 코드로 테스트된다(§6.7 `ports.ts`의 `Llm`을 이것으로).
 2. **`reasoning_effort` 설정 키.** 비어 있으면 요청에 넣지 않는다(§9.9).
 3. **`llm_calls.error`.** API 오류(`api: ...`)와 파싱 실패(`parse: ...`)를 구분해 남긴다(§8.6). 캐시 쓰기 토큰도 남기려면 `cache_write_tokens` 컬럼.
 4. **SDK 재시도 끔.** `new OpenAI({ maxRetries: 0 })`. 백오프는 §6.2가 맡는다.
+
+## 모델 선택
+
+- `gpt-6-luna`: `reasoning_effort=none`으로 쓴다.
+- 그보다 낮은 급에서는 `gpt-4o`가 한국어가 가장 낫다(사용자 경험). 추론 모델이 아니므로 `reasoning_effort`는 비운다.
 
 ## 구조
 

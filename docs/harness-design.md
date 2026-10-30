@@ -300,7 +300,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 
 ### 5.4 공통
 
-- openai SDK 호환 API로 부른다(`provider`). 출력은 JSON(`response_format: json_object`)이고 zod로 검증한다. 파싱·스키마 실패면 1회 재시도하고, 그래도 실패하면 작업 실패다(턴 §9.4, 정리·계획 §9.6).
+- openai SDK 호환 API로 부른다(`provider`). 출력은 JSON(`response_format: json_object`)이고 zod로 검증한다. 파싱·스키마 실패면 1회 재시도하고, 그래도 실패하면 작업 실패다(턴 §9.4, 정리·계획 §9.6). SDK 자체 재시도는 끈다(`maxRetries: 0`). API 오류의 재시도는 §6.2 백오프가 맡는다. 구현 참고: `docs/notes/openai-adapter.md`.
 - 도구 라운드는 최대 `max_tool_rounds`(정리는 `max_cleanup_tool_rounds`)회. 넘으면 도구 목록은 둔 채 `tool_choice: "none"`으로 한 번 더 불러 최종 출력을 받는다. 도구의 읽기는 바로 결과를 돌려주고, 쓰기는 `TurnTx`·`MemoryTx`에 모았다가 성공 커밋에서 반영한다.
 - 이벤트 블록은 저장하지 않는다. 조립할 때마다 만든다.
 - LLM 호출 직전 보류 게이트(§6.3). 요청마다 `llm_calls`에 한 행을 남긴다(§8.6).
@@ -426,7 +426,7 @@ LLM을 부를 수 없는 상태다. 사유는 셋이다.
 
 - 스택: Node 24 + TypeScript(타입 제거 실행, `tsc`는 타입 검사만), SQLite(`node:sqlite`), grammY(텔레그램, 재시도 플러그인 없이 §6.4대로 처리), openai SDK 호환 클라이언트, luxon(시간대), zod(검증). 테스트는 `node:test`, 패키지 관리는 pnpm, 린트는 oxlint, 포맷은 oxfmt, 커밋 전 검사(`pnpm check`)는 lefthook. 마이그레이션은 SQL 파일과 `PRAGMA user_version`.
 - 설정은 단일 파일(`DATA_DIR/config`)이고 `KEY=value` 형식이다(`util.parseEnv`로 읽는다). 시작 시 zod로 검증한다. 바꾸려면 재시작한다. 키는 §9.9, 예시는 `examples/config.example`.
-- 시계·LLM·텔레그램은 인터페이스로 주입한다. 테스트는 가짜 시계·가짜 LLM·가짜 텔레그램과 메모리 SQLite(`:memory:`)로 돌아서 네트워크·API 키가 필요 없다.
+- 시계·LLM·텔레그램은 인터페이스로 주입한다. LLM 포트는 SDK 모양의 `ChatClient { create(params) }` 하나라서, 도구 라운드·강제 호출·재시도·`llm_calls` 기록이 테스트에서도 실제 코드로 돈다. 테스트는 가짜 시계·가짜 LLM(각본 completion)·가짜 텔레그램과 메모리 SQLite(`:memory:`)로 돌아서 네트워크·API 키가 필요 없다.
 - 단일 인스턴스: `aigan.lock`. 두 번째 인스턴스와 실행 중 리셋은 잠금에서 거부된다.
 
 ```
@@ -444,7 +444,7 @@ DATA_DIR/
 src/
 ├── main.ts            # 진입점: serve / reset / memory (§9.10)
 ├── config.ts          # §9.9
-├── ports.ts           # Clock, Llm, Telegram 인터페이스
+├── ports.ts           # Clock, ChatClient, Telegram 인터페이스
 ├── time.ts            # 블랙아웃·계획일·backoff (§6.1, §6.2)
 ├── prompts.ts         # §5.5
 ├── db/                # 연결·잠금·마이그레이션, migrations/001_init.sql(§8), 쿼리
@@ -574,7 +574,7 @@ test/
 ### 8.6 `plans`, `llm_calls`
 
 - `plans(plan_date PK, body, created_at)`. 계획일당 1행.
-- `llm_calls(id, kind, flow_id, request, response, input_tokens, cached_tokens, output_tokens, latency_ms, success, created_at)`. API 요청 1건이 1행(도구 라운드·재시도 포함). `kind`: `turn` / `plan` / `cleanup` / `compact`. 인덱스: `created_at`, `kind`.
+- `llm_calls(id, kind, flow_id, request, response, input_tokens, cached_tokens, output_tokens, latency_ms, success, error, created_at)`. API 요청 1건이 1행(도구 라운드·재시도 포함). `error`는 실패 사유로 API 오류(`api: ...`)와 파싱 실패(`parse: ...`)를 구분한다. `kind`: `turn` / `plan` / `cleanup` / `compact`. 인덱스: `created_at`, `kind`.
 
 ### 8.7 `memory_state`, `memory_sections`
 
@@ -905,6 +905,7 @@ out = await llm(ctx)
 |---|---|---|
 | `provider` | — | `openai` / `deepseek` |
 | `model`, `api_key` | — | |
+| `reasoning_effort` | (비움) | 비우면 요청에 넣지 않는다. 추론 모델에서 effort와 도구를 함께 못 쓰는 경우가 있다(`gpt-6-luna`는 `none`만) |
 | `bot_token`, `owner_chat_id` | — | |
 | `daily_call_limit` | — | 일일 LLM 요청 상한(§6.3) |
 | `balance_threshold`, `balance_retry_sec` | — | `deepseek`일 때만(§6.3) |

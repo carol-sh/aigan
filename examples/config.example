@@ -4,6 +4,7 @@
 # 연결
 provider=openai
 model=
+reasoning_effort=
 api_key=
 bot_token=
 owner_chat_id=
