@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { TelegramError } from "../../src/ports.ts";
 import { Gate } from "../fakes/gate.ts";
 import { ScriptedLlm, type ScriptedTurn, type TurnScript } from "../fakes/scripted-llm.ts";
 import { type StartOptions, type TestApp, startApp } from "../rig.ts";
@@ -164,7 +165,7 @@ test("66: 후속 확인 예약은 여러 개여도 개시 예약 상한에 걸�
   assert.equal(harnessReservations(app).length, 3);
 });
 
-test("67: 닫히는 턴의 io 중에 온 메시지는 흐름 밖 판정 대기가 되어 판정 턴이 받는다", async (t) => {
+test("12, 67: 닫히는 턴의 io 중에 온 메시지를 지우지 못하면 흐름 밖 판정 대기가 되어 판정 턴이 받는다", async (t) => {
   const gate = new Gate();
   const llm = new ScriptedLlm().onTurn(
     (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
@@ -178,6 +179,7 @@ test("67: 닫히는 턴의 io 중에 온 메시지는 흐름 밖 판정 대기�
   await app.advance({ seconds: 20 });
   await app.user("갈게");
   await app.advance({ seconds: 20 });
+  app.telegram.failNextDeletes(new TelegramError(400, "message can't be deleted"));
   await app.user("아 하나만 더");
 
   gate.open();

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DurationLike } from "luxon";
+import { TelegramError } from "../../src/ports.ts";
 import { Gate } from "../fakes/gate.ts";
 import { ScriptedLlm, inputSection } from "../fakes/scripted-llm.ts";
 import { type TestApp, startApp } from "../rig.ts";
@@ -370,4 +371,34 @@ test("48g: 블랙아웃 시작 직전 디바운스 중에 온 말은 닫힌 흐�
     "[10-30 22:30] 나: 응",
   ]);
   assert.deepEqual(inputSection(input, "흐름 밖 메시지"), ["[10-30 22:59] 사용자: 잠깐만"]);
+});
+
+test("44: 턴 io 중에 온 메시지를 지우지 못하면 미응답으로 남아 다음 턴 입력에 들어간다", async (t) => {
+  const gate = new Gate();
+  const llm = new ScriptedLlm().onTurn(
+    (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
+    async (turn) => {
+      await gate.wait();
+      return turn.say("그래", { continueAfter: { hours: 1 } });
+    },
+    (turn) => turn.say("그것도 말해 봐", { continueAfter: { hours: 1 } }),
+  );
+  const app = await startApp(t, { llm });
+  await app.user("시작");
+  await app.advance({ seconds: 20 });
+  await app.user("하나 더");
+  await app.advance({ seconds: 20 });
+  app.telegram.failNextDeletes(new TelegramError(400, "message can't be deleted"));
+  await app.user("m3");
+
+  gate.open();
+  await app.advance({ seconds: 21 });
+
+  assert.deepEqual(app.llmTasks.slice(-2), ["10-30 10:00 turn:reply", "10-30 10:01 turn:reply"]);
+  assert.deepEqual(inputSection(app.llm.lastInput("turn"), "흐름 대화").slice(-3), [
+    "[10:00] 사용자: 하나 더",
+    "[10:00] 사용자: m3",
+    "[10:00] 나: 그래",
+  ]);
+  assert.ok(app.logger.lines.some((line) => line.includes("지우지 못했다")));
 });

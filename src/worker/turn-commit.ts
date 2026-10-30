@@ -14,11 +14,13 @@ export interface DecidedTurn {
   lastSeenUserMessageId: number;
   output: TurnOutput;
   changes: TurnChanges;
+  /** io 중에 와서 텔레그램에서 지운 user 메시지. 말한 턴이면 `busy`로 표시한다. */
+  busyMessageIds: number[];
 }
 
 export function commitTurn(ctx: HarnessContext, turn: DecidedTurn): void {
   inTransaction(ctx.db, () => {
-    const output = hasOpeningTurnRunIntoBlackout(ctx, turn)
+    const output = hasOpeningTurnRunIntoBlackout(ctx, turn.task)
       ? { ...turn.output, messages: [] }
       : turn.output;
     const isSilent = output.messages.length === 0;
@@ -34,6 +36,7 @@ export function commitTurn(ctx: HarnessContext, turn: DecidedTurn): void {
 
     const flowId = "flowId" in turn.task ? turn.task.flowId : openFlowFor(ctx, turn);
     if (!isSilent) {
+      ctx.messages.markBusy(turn.busyMessageIds);
       turn.changes.applyTo(ctx, flowId);
       queueMessages(ctx, flowId, output.messages);
     }
@@ -50,8 +53,8 @@ function opensFlow(task: TurnTask): boolean {
 }
 
 /** io가 블랙아웃 시작을 넘긴 AI 개시 턴은 말 없는 개입 취소로 바꾼다. 블랙아웃에 새 흐름을 열지 않는다. */
-function hasOpeningTurnRunIntoBlackout(ctx: HarnessContext, turn: DecidedTurn): boolean {
-  return turn.task.trigger === "open" && ctx.calendar.isInBlackout(ctx.clock.now());
+export function hasOpeningTurnRunIntoBlackout(ctx: HarnessContext, task: TurnTask): boolean {
+  return task.trigger === "open" && ctx.calendar.isInBlackout(ctx.clock.now());
 }
 
 function declineToOpenFlow(ctx: HarnessContext, turn: DecidedTurn): void {

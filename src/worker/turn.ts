@@ -7,7 +7,8 @@ import type { TurnTask } from "./tasks.ts";
 import { TurnChanges, type WorkingGoal } from "./tools/turn-changes.ts";
 import type { ToolBox } from "./tools/tool-box.ts";
 import { createTurnTools } from "./tools/turn-tools.ts";
-import { commitTurn } from "./turn-commit.ts";
+import { deleteMessagesArrivedDuringIo, keepTypingDuring } from "./telegram-during-io.ts";
+import { commitTurn, hasOpeningTurnRunIntoBlackout } from "./turn-commit.ts";
 
 export interface TurnOutput {
   messages: string[];
@@ -39,6 +40,7 @@ export async function runTurn(
 ): Promise<void> {
   const planDate = ctx.calendar.currentPlanDate(ctx.clock.now());
   const input = assembleTurnInput(ctx, task, planDate);
+  const lastMessageIdBeforeIo = ctx.messages.latestMessageId();
   const consumedOpeningId = task.trigger === "open" ? task.reservationId : undefined;
   const changes = TurnChanges.load(ctx, { consumedOpeningId });
   const conversation = decider.begin({
@@ -48,31 +50,59 @@ export async function runTurn(
     input,
   });
 
-  let output: TurnOutput;
-  try {
-    output = await conversation.decide();
-  } catch (error) {
-    ctx.logger.warn(`턴(${task.trigger})이 실패해 아무것도 바꾸지 않았다`, error);
-    return;
-  }
+  const decide = () =>
+    decideOutput(ctx, conversation, { task, planDate, changes, consumedOpeningId });
+  const output = isInFlowTurn(task) ? await keepTypingDuring(ctx, decide) : await decide();
+  if (output === undefined) return;
 
-  const goalsWithoutNextCheck = leavesNoFlow(task, output)
-    ? findGoalsWithoutNextCheck(ctx, output.messages.length > 0 ? changes : undefined, {
-        planDate,
-        consumedOpeningId,
-      })
+  const busyMessageIds = willSpeak(ctx, task, output)
+    ? await deleteMessagesArrivedDuringIo(ctx, lastMessageIdBeforeIo)
     : [];
-  if (goalsWithoutNextCheck.length > 0) {
-    output = await reconsiderOrKeep(ctx, conversation, output, goalsWithoutNextCheck);
-  }
-
   commitTurn(ctx, {
     task,
     planDate,
     lastSeenUserMessageId: input.lastShownUserMessageId,
     output,
     changes,
+    busyMessageIds,
   });
+}
+
+interface TurnInProgress {
+  task: TurnTask;
+  planDate: PlanDate;
+  changes: TurnChanges;
+  consumedOpeningId: number | undefined;
+}
+
+/** 결정하고 필요하면 한 번 되묻는다. 결정이 실패하면 아무것도 바꾸지 않고 `undefined`를 낸다. */
+async function decideOutput(
+  ctx: HarnessContext,
+  conversation: TurnConversation,
+  turn: TurnInProgress,
+): Promise<TurnOutput | undefined> {
+  let output: TurnOutput;
+  try {
+    output = await conversation.decide();
+  } catch (error) {
+    ctx.logger.warn(`턴(${turn.task.trigger})이 실패해 아무것도 바꾸지 않았다`, error);
+    return undefined;
+  }
+
+  const goalsWithoutNextCheck = leavesNoFlow(turn.task, output)
+    ? findGoalsWithoutNextCheck(ctx, output.messages.length > 0 ? turn.changes : undefined, turn)
+    : [];
+  if (goalsWithoutNextCheck.length === 0) return output;
+  return reconsiderOrKeep(ctx, conversation, output, goalsWithoutNextCheck);
+}
+
+/** 흐름이 없을 때의 판정·AI 개시 턴은 말할지 모르는 턴이라 입력 중 표시를 띄우지 않는다. */
+function isInFlowTurn(task: TurnTask): boolean {
+  return task.trigger === "continue" || task.trigger === "reply";
+}
+
+function willSpeak(ctx: HarnessContext, task: TurnTask, output: TurnOutput): boolean {
+  return output.messages.length > 0 && !hasOpeningTurnRunIntoBlackout(ctx, task);
 }
 
 async function reconsiderOrKeep(

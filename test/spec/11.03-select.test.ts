@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { TelegramError } from "../../src/ports.ts";
 import { Gate } from "../fakes/gate.ts";
 import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { type TestApp, startApp } from "../rig.ts";
@@ -30,7 +31,7 @@ test("13: 밀린 개시 예약과 디바운스가 지난 판정 대기가 함께
   ]);
 });
 
-test("13: 개시 턴의 io 중에 온 메시지는 흡수돼도 본 적 없는 것이라 디바운스 뒤 답장 턴이 받는다", async (t) => {
+test("13, 31: 개시 턴의 io 중에 온 메시지를 지우지 못하면 흡수돼도 본 적 없는 것이라 디바운스 뒤 답장 턴이 받는다", async (t) => {
   const gate = new Gate();
   const llm = new ScriptedLlm()
     .onPlan((plan) => plan.finishPlan({ openings: [{ at: "10:30" }] }))
@@ -40,6 +41,7 @@ test("13: 개시 턴의 io 중에 온 메시지는 흡수돼도 본 적 없는 �
     });
   const app = await startApp(t, { llm });
   await app.advanceTo("10:30");
+  app.telegram.failNextDeletes(new TelegramError(400, "message can't be deleted"));
   await app.user("지금 바빠");
 
   gate.open();
@@ -220,7 +222,7 @@ test("20: 보류 중이면 디바운스가 지난 메시지가 있어도 다음 
   assert.deepEqual(app.llmTasks, ["10-30 10:00 plan"]);
 });
 
-test("21: 작업 중 wake()는 무시되고, 작업이 끝나면 그동안 온 메시지를 다음 작업으로 고른다", async (t) => {
+test("21: 작업 중 wake()는 무시되고, 작업이 끝나면 그동안 와서 지우지 못한 메시지를 다음 작업으로 고른다", async (t) => {
   let finishTurn = () => {};
   const turnMayFinish = new Promise<void>((resolve) => (finishTurn = resolve));
   const llm = new ScriptedLlm().onTurn(async (turn) => {
@@ -231,6 +233,7 @@ test("21: 작업 중 wake()는 무시되고, 작업이 끝나면 그동안 온 �
   await app.user("시작");
   await app.advance({ seconds: 20 });
 
+  app.telegram.failNextDeletes(new TelegramError(400, "message can't be deleted"));
   const wakeUps = await wakeUpsDuring(app, () => app.user("턴 도중에 온 말"));
   finishTurn();
   await app.advance({ seconds: 20 });

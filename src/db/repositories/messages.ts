@@ -81,6 +81,24 @@ export class MessageRepository {
     return latestFirst.reverse();
   }
 
+  latestMessageId(): number {
+    const row = this.#db.prepare("SELECT MAX(id) AS id FROM messages").get() as {
+      id: number | null;
+    };
+    return row.id ?? 0;
+  }
+
+  findUserMessagesAfter(messageId: number): Message[] {
+    return this.#db
+      .prepare("SELECT * FROM messages WHERE role = 'user' AND id > ? ORDER BY id")
+      .all(messageId) as unknown as Message[];
+  }
+
+  markBusy(messageIds: number[]): void {
+    const markOne = this.#db.prepare("UPDATE messages SET void_reason = 'busy' WHERE id = ?");
+    for (const messageId of messageIds) markOne.run(messageId);
+  }
+
   findShownOutsideFlow(): Message[] {
     return this.#db
       .prepare("SELECT * FROM messages WHERE flow_id IS NULL AND void_reason IS NULL ORDER BY id")

@@ -7,7 +7,9 @@ type ScriptedFailure = Error | "hang";
 export class FakeTelegram implements Telegram {
   readonly sent: string[] = [];
   readonly deleted: number[] = [];
+  typingShownCount = 0;
   #scriptedFailures: ScriptedFailure[] = [];
+  #scriptedDeleteFailures: ScriptedFailure[] = [];
   #nextUpdateId = 1;
   #nextMessageId = 1;
 
@@ -22,11 +24,20 @@ export class FakeTelegram implements Telegram {
     this.sent.push(text);
   }
 
+  failNextDeletes(...failures: ScriptedFailure[]): void {
+    this.#scriptedDeleteFailures.push(...failures);
+  }
+
   async deleteMessage(messageId: number): Promise<void> {
+    const failure = this.#scriptedDeleteFailures.shift();
+    if (failure === "hang") return new Promise(() => {});
+    if (failure) throw failure;
     this.deleted.push(messageId);
   }
 
-  async showTyping(): Promise<void> {}
+  async showTyping(): Promise<void> {
+    this.typingShownCount++;
+  }
 
   textUpdate(text: string, chatId = OWNER_CHAT_ID): Update {
     return this.#update({ text, chat: privateChat(chatId) });

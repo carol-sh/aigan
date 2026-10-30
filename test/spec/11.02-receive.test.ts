@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "../../src/db/repositories/messages.ts";
-import { ScriptedLlm, inputSection } from "../fakes/scripted-llm.ts";
+import { Gate } from "../fakes/gate.ts";
+import { ScriptedLlm, type TurnScript, inputSection } from "../fakes/scripted-llm.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
 function userMessages(app: TestApp): Pick<Message, "content" | "flow_id" | "triage">[] {
@@ -117,4 +118,125 @@ test("12d, 12e: 흐름 밖 메시지가 outside_messages_max개를 넘으면 판
     assert.ok(!/사용자: m[1-5]$/m.test(input), "잘린 메시지는 입력에 없다");
     assert.ok(input.includes("[10:00] 사용자: m6"));
   }
+});
+
+/** 사용자가 연 흐름에 답하면, 답장 턴의 io가 문이 열릴 때까지 멈춰 있고 그동안 사용자가 한 마디 더 한다. */
+async function startReplyTurnInterruptedBy(
+  t: Parameters<typeof startApp>[0],
+  interruption: string,
+  scripts: { reply: TurnScript; afterwards?: TurnScript[] },
+) {
+  const gate = new Gate();
+  const llm = new ScriptedLlm().onTurn(
+    (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
+    async (turn) => {
+      await gate.wait();
+      return scripts.reply(turn);
+    },
+    ...(scripts.afterwards ?? []),
+  );
+  const app = await startApp(t, { llm });
+  await app.user("시작");
+  await app.advance({ seconds: 20 });
+  await app.user("하나 더");
+  await app.advance({ seconds: 20 });
+  await app.user(interruption);
+  return { app, gate };
+}
+
+function messageByContent(app: TestApp, content: string) {
+  return app.row<{ id: number; tg_message_id: number; void_reason: string | null }>(
+    "SELECT id, tg_message_id, void_reason FROM messages WHERE content = ?",
+    content,
+  );
+}
+
+test("12a: 말한 턴의 io 중에 온 메시지는 커밋 전에 지우고 busy로 표시해, 다음 턴·정리 입력과 미응답에서 빠진다", async (t) => {
+  const { app, gate } = await startReplyTurnInterruptedBy(t, "아 잠깐", {
+    reply: (turn) => turn.say("그래", { continueAfter: { minutes: 30 } }),
+    afterwards: [(turn) => turn.end("끝내자")],
+  });
+
+  gate.open();
+  await app.advanceTo("10:32");
+
+  const interruption = messageByContent(app, "아 잠깐");
+  assert.equal(interruption.void_reason, "busy");
+  assert.deepEqual(app.telegram.deleted, [interruption.tg_message_id]);
+  assert.deepEqual(app.llmTasks.slice(1), [
+    "10-30 10:00 turn:user",
+    "10-30 10:00 turn:reply",
+    "10-30 10:30 turn:continue",
+    "10-30 10:30 cleanup",
+  ]);
+  assert.ok(!app.llm.lastInput("turn").includes("아 잠깐"));
+  assert.ok(!app.llm.lastInput("cleanup").includes("아 잠깐"));
+});
+
+test("12f: 조용히 기다린 답장 턴의 io 중에 온 메시지는 지우지 않고 다음 답장 턴이 받는다", async (t) => {
+  const { app, gate } = await startReplyTurnInterruptedBy(t, "아 잠깐", {
+    reply: (turn) => turn.silent(),
+    afterwards: [(turn) => turn.say("응 말해", { continueAfter: { hours: 1 } })],
+  });
+
+  gate.open();
+  await app.advance({ seconds: 21 });
+
+  assert.deepEqual(app.telegram.deleted, []);
+  assert.equal(messageByContent(app, "아 잠깐").void_reason, null);
+  assert.ok(
+    inputSection(app.llm.lastInput("turn"), "흐름 대화").includes("[10:00] 사용자: 아 잠깐"),
+  );
+});
+
+test("12g: 지운 뒤 커밋 전에 죽으면 DB에는 평소 메시지로 남아 재시작 뒤 다시 도는 턴이 받는다", async (t) => {
+  const { app, gate } = await startReplyTurnInterruptedBy(t, "아 잠깐", {
+    reply: (turn) => turn.say("그래", { continueAfter: { minutes: 30 } }),
+    afterwards: [(turn) => turn.say("다시 말해 줘", { continueAfter: { minutes: 30 } })],
+  });
+  app.telegram.failNextDeletes("hang");
+  gate.open();
+  await app.advance({ seconds: 1 });
+
+  await app.restart({ downFor: { seconds: 10 } });
+  await app.advance({ seconds: 20 });
+
+  assert.equal(messageByContent(app, "아 잠깐").void_reason, null);
+  assert.deepEqual(
+    inputSection(app.llm.lastInput("turn"), "흐름 대화").filter((line) => line.includes("사용자")),
+    ["[10:00] 사용자: 시작", "[10:00] 사용자: 하나 더", "[10:00] 사용자: 아 잠깐"],
+  );
+  assert.deepEqual(app.telegram.sent, ["응", "다시 말해 줘"]);
+});
+
+test("12b: 흐름 안 턴의 io 동안만 입력 중 표시를 몇 초마다 다시 보내고, io가 끝나면 멈춘다", async (t) => {
+  const judgingGate = new Gate();
+  const replyGate = new Gate();
+  const llm = new ScriptedLlm().onTurn(
+    async (turn) => {
+      await judgingGate.wait();
+      return turn.say("응", { continueAfter: { hours: 1 } });
+    },
+    async (turn) => {
+      await replyGate.wait();
+      return turn.say("그래", { continueAfter: { hours: 1 } });
+    },
+  );
+  const app = await startApp(t, { llm });
+  await app.user("시작");
+  await app.advance({ seconds: 30 });
+  const typingDuringJudgingTurn = app.telegram.typingShownCount;
+  judgingGate.open();
+  await app.advance({ seconds: 1 });
+  await app.user("하나 더");
+  await app.advance({ seconds: 20 });
+  await app.advance({ seconds: 10 });
+  const typingDuringReplyTurn = app.telegram.typingShownCount;
+
+  replyGate.open();
+  await app.advance({ seconds: 30 });
+
+  assert.equal(typingDuringJudgingTurn, 0);
+  assert.equal(typingDuringReplyTurn, 3);
+  assert.equal(app.telegram.typingShownCount, 3);
 });

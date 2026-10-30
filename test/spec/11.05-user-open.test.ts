@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Gate } from "../fakes/gate.ts";
-import { ScriptedLlm } from "../fakes/scripted-llm.ts";
+import { ScriptedLlm, inputSection } from "../fakes/scripted-llm.ts";
 import { startApp } from "../rig.ts";
 
 test("33: 말한 판정 턴은 사용자가 연 흐름을 만들고 흐름 밖 메시지를 모두 옮긴다", async (t) => {
@@ -114,4 +114,26 @@ test("흐름을 열 때 흐름 밖 메시지가 outside_messages_max개를 넘�
       { content: "셋", flow_id: 1, void_reason: null },
     ],
   );
+});
+
+test("12f, 35: 무시한 판정 턴의 io 중에 온 메시지는 지우지 않고, 새 디바운스 뒤 판정 턴이 앞서 무시한 메시지와 함께 본다", async (t) => {
+  const gate = new Gate();
+  const llm = new ScriptedLlm().onTurn(async (turn) => {
+    await gate.wait();
+    return turn.silent();
+  });
+  const app = await startApp(t, { llm });
+  await app.user("음");
+  await app.advance({ seconds: 20 });
+  await app.user("턴 도중에 온 말");
+
+  gate.open();
+  await app.advance({ seconds: 21 });
+
+  assert.deepEqual(app.telegram.deleted, []);
+  assert.deepEqual(app.llmTasks.slice(1), ["10-30 10:00 turn:user", "10-30 10:00 turn:user"]);
+  assert.deepEqual(inputSection(app.llm.lastInput("turn"), "흐름 밖 메시지"), [
+    "[10:00] 사용자: 음 (무시됨)",
+    "[10:00] 사용자: 턴 도중에 온 말",
+  ]);
 });
