@@ -17,6 +17,7 @@
 | [`plans/skeleton.md`](plans/skeleton.md) | 뼈대(LLM 없는 전부) 구현 계획. 코드 작성 원칙, 정본 이름→코드 이름, e2e 테스트 전략 |
 | [`plans/flow-and-tools.md`](plans/flow-and-tools.md) | 2단계 흐름과 도구 구현 계획. 턴·정리의 io 밖 절반, 도구 검증, 각본 결정자로 하는 e2e |
 | [`plans/llm-executor.md`](plans/llm-executor.md) | 3단계 LLM 실행기 구현 계획. 입력 조립·출력 스키마·도구 라운드·`llm_calls`, 각본 모델로 하는 e2e, 프롬프트 작성용 계약 |
+| [`plans/turn-failure.md`](plans/turn-failure.md) | 4단계 턴 실패 구현 계획. 시도 선기록, `fail_turn`과 트리거 포기, 운영자 알림 |
 
 ## 프롬프트 작성용
 
