@@ -90,7 +90,7 @@ export class ScriptedLlm implements ChatClient {
   create(params: ChatCompletionCreateParamsNonStreaming): Promise<ChatCompletion> {
     this.requests.push(structuredClone(params));
     if (this.problems.length > 0) return new Promise(() => {});
-    if (!params.messages.some((message) => message.role === "assistant")) {
+    if (isConversationStart(params)) {
       this.#conversation = this.#startConversation(params);
     }
     if (this.#isRunaway()) return new Promise(() => {});
@@ -107,13 +107,15 @@ export class ScriptedLlm implements ChatClient {
     return this.requests.filter((params) => kindOf(params) === kind);
   }
 
-  /** 마지막으로 시작한 `kind` 대화의 입력 문서(user 메시지). */
+  /** `kind` 대화마다 처음 받은 입력 문서(user 메시지). 시작한 순서다. */
+  inputs(kind: "turn" | "cleanup"): string[] {
+    return this.requestsOf(kind).filter(isConversationStart).map(documentOf);
+  }
+
   lastInput(kind: "turn" | "cleanup"): string {
-    const request = this.requests.findLast(
-      (params) => kindOf(params) === kind && !params.messages.some((m) => m.role === "assistant"),
-    );
-    if (request === undefined) throw new Error(`${kind} 요청이 없다`);
-    return documentOf(request);
+    const input = this.inputs(kind).at(-1);
+    if (input === undefined) throw new Error(`${kind} 요청이 없다`);
+    return input;
   }
 
   #startConversation(params: ChatCompletionCreateParamsNonStreaming): ScriptedConversation {
@@ -429,6 +431,10 @@ function kindOf(params: ChatCompletionCreateParamsNonStreaming): "turn" | "clean
   if (toolNames.includes("goal_create")) return "turn";
   if (toolNames.includes("state_write")) return "cleanup";
   throw new Error(`도구 목록으로 작업을 알 수 없다: ${toolNames.join(", ")}`);
+}
+
+function isConversationStart(params: ChatCompletionCreateParamsNonStreaming): boolean {
+  return !params.messages.some((message) => message.role === "assistant");
 }
 
 function documentOf(params: ChatCompletionCreateParamsNonStreaming): string {

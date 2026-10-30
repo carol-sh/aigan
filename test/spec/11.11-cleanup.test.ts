@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ToolResult } from "../../src/worker/tools/tool-box.ts";
-import { type CleanupScript, ScriptedLlm } from "../fakes/scripted-llm.ts";
+import { type CleanupScript, ScriptedLlm, inputSection } from "../fakes/scripted-llm.ts";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { type StartOptions, type TestApp, startApp } from "../rig.ts";
 
 const neverFinishes = () => new Promise<never>(() => {});
@@ -194,4 +196,66 @@ test("90i: 같은 정리 안에서 쓴 칸은 memory_read로 바로 읽힌다", 
 
   assert.deepEqual(results[0], { ok: true, content: "아침형" });
   assertRejected(results[1], /습관/);
+});
+
+test("90a, 90c, 90k: 정리 입력은 규칙만 system에 두고, 흐름 정보·목표·대화 원문을 보여 준다", async (t) => {
+  const llm = new ScriptedLlm()
+    .onTurn(
+      (turn) => turn.silent(),
+      async (turn) => {
+        const water = await turn.createGoal({ title: "물" });
+        await turn.createGoal({ title: "책" });
+        await turn.use("goal_close", { goal_id: 2, result: "done", reason: "다 읽음" });
+        await turn.reserveOpening({ at: "13:00", intent: "중간 확인", goalIds: [water] });
+        return turn.end("13시에 볼게");
+      },
+      (turn) => turn.say("물 얼마나 마셨어?", { continueAfter: { minutes: 30 } }),
+      (turn) => turn.end(["반이면 됐다", "저녁까지 다 마셔"]),
+    )
+    .onReconsider(async (turn) => {
+      await turn.reserveOpening({ at: "18:00", intent: "최종 확인", goalIds: [1] });
+      return turn.end(["반이면 됐다", "6시에 다시 볼게"]);
+    });
+  const app = await startApp(t, {
+    llm,
+    preparePrompts: (dir) => writeFileSync(join(dir, "persona.md"), "까칠한 코치"),
+  });
+  await app.user("심심해");
+  await app.advance({ seconds: 20 });
+  await app.advanceTo("10:05");
+  await app.user("할 일 줘");
+  await app.advance({ seconds: 20 });
+  await app.advanceTo("13:01");
+  await app.user("반 마심");
+  await app.advance({ seconds: 21 });
+
+  const [userFlowCleanup, aiFlowCleanup] = app.llm.inputs("cleanup");
+  assert.deepEqual(inputSection(userFlowCleanup!, "대화"), [
+    "[10:00] 사용자: 심심해 (무시됨)",
+    "[10:05] 사용자: 할 일 줘",
+    "[10:05] 나: 13시에 볼게",
+  ]);
+  assert.deepEqual(inputSection(aiFlowCleanup!, "흐름"), [
+    "개시: AI(개시 의도: 중간 확인)",
+    "시작: 2026-10-30 13:00 / 종료: 2026-10-30 13:01 (agent)",
+  ]);
+  assert.deepEqual(inputSection(aiFlowCleanup!, "목표 (계획일 2026-10-30)"), [
+    "- #1 물 (sample) [active] — 이 흐름에서 다룸",
+    "  완료 조건: 물 끝",
+    "  진행 메모: (없음)",
+    "- #2 책 (sample) [done] 다 읽음",
+    "  완료 조건: 책 끝",
+    "  진행 메모: (없음)",
+  ]);
+  assert.deepEqual(inputSection(aiFlowCleanup!, "대화"), [
+    "[13:00] 나: 물 얼마나 마셨어?",
+    "[13:01] 사용자: 반 마심",
+    "[13:01] 나: 반이면 됐다",
+    "[13:01] 나: 6시에 다시 볼게",
+  ]);
+  assert.deepEqual(inputSection(aiFlowCleanup!, "지금"), ["2026-10-30 13:01"]);
+  for (const request of app.llm.requestsOf("cleanup")) {
+    assert.equal(request.messages[0]?.content, "기억에 남길 것을 정리한다.");
+  }
+  assert.ok(String(app.llm.requestsOf("turn")[0]?.messages[0]?.content).startsWith("까칠한 코치"));
 });

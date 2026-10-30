@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "../../src/db/repositories/messages.ts";
-import { ScriptedLlm } from "../fakes/scripted-llm.ts";
+import { ScriptedLlm, inputSection } from "../fakes/scripted-llm.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
 function userMessages(app: TestApp): Pick<Message, "content" | "flow_id" | "triage">[] {
@@ -94,4 +94,27 @@ test("11c: 몰아 받은 메시지 3개는 저장 시각 기준이라 한 디바
     userMessages(app).map((message) => message.triage),
     ["ignored", "ignored", "ignored"],
   );
+});
+
+test("12d, 12e: 흐름 밖 메시지가 outside_messages_max개를 넘으면 판정 턴은 최근 것만 보고, 흐름이 열린 뒤에는 잘린 것이 어디에도 없다", async (t) => {
+  const llm = new ScriptedLlm().onTurn(
+    (turn) => turn.say("다 봤어", { continueAfter: { minutes: 10 } }),
+    (turn) => turn.end("그럼 이만"),
+  );
+  const app = await startApp(t, { llm });
+  for (let n = 1; n <= 25; n++) await app.user(`m${n}`);
+  await app.advance({ seconds: 20 });
+  await app.user("또");
+  await app.advance({ seconds: 20 });
+
+  const [judgingTurn, replyTurn] = app.llm.inputs("turn");
+  const kept = Array.from({ length: 20 }, (_, index) => `[10:00] 사용자: m${index + 6}`);
+  assert.deepEqual(inputSection(judgingTurn!, "흐름 밖 메시지"), [
+    "(이전 흐름 밖 메시지 5개 생략)",
+    ...kept,
+  ]);
+  for (const input of [replyTurn!, app.llm.lastInput("cleanup")]) {
+    assert.ok(!/사용자: m[1-5]$/m.test(input), "잘린 메시지는 입력에 없다");
+    assert.ok(input.includes("[10:00] 사용자: m6"));
+  }
 });

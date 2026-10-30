@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import type { ToolResult } from "../../src/worker/tools/tool-box.ts";
-import { ScriptedLlm, type ScriptedTurn } from "../fakes/scripted-llm.ts";
+import { ScriptedLlm, type ScriptedTurn, inputSection } from "../fakes/scripted-llm.ts";
 import { type StartOptions, type TestApp, startApp } from "../rig.ts";
 
 /** 사용자가 연 첫 턴에서 각본대로 도구를 쓰고 한 줄 말한 뒤 1시간 뒤로 이어간다. */
@@ -471,4 +471,115 @@ test("도구 인자가 JSON이 아니면 거부 결과를 돌려주고 턴은 �
 
   assertRejected(results[0], /도구 인자가 JSON이 아니다/);
   assert.deepEqual(app.telegram.sent, ["응"]);
+});
+
+/** 사용자가 연 흐름에서 첫 턴이 각본대로 하고 1시간 뒤로 이어간 뒤, 사용자가 답해 둘째 턴이 돈다. */
+async function secondTurnInput(t: TestContext, firstTurn: (turn: ScriptedTurn) => unknown) {
+  const app = await startWithUserTurn(t, firstTurn);
+  await app.user("응");
+  await app.advance({ seconds: 20 });
+  return { app, firstInput: app.llm.inputs("turn")[0]!, secondInput: app.llm.lastInput("turn") };
+}
+
+test("51, 51a: 방침은 id와 설명 목록만 보이고, 본문은 만든 목표의 방침 사본으로만 들어간다", async (t) => {
+  const jobBody = "<!-- 방침 본문. docs/harness-design.md §2.1 -->";
+  const { firstInput, secondInput } = await secondTurnInput(t, (turn) =>
+    turn.createGoal({ title: "물", dueAt: "18:00" }),
+  );
+
+  assert.deepEqual(inputSection(firstInput, "방침"), [
+    "- sample: 한 줄 설명. 계획과 턴의 방침 목록에 이 줄이 보인다",
+  ]);
+  assert.ok(!firstInput.includes(jobBody));
+  assert.deepEqual(inputSection(secondInput, "지금 활성 목표"), [
+    "- #1 물 (sample, 마감 2026-10-30 18:00)",
+    "  완료 조건: 물 끝",
+    "  진행 메모: (없음)",
+    "  방침 사본:",
+    `    ${jobBody}`,
+  ]);
+});
+
+test("58a: 개시 예약은 at 순으로 전부 나오고 목표·출처·밀림을 표시한다. 목표 쪽에도 걸린 예약이 전부 나온다", async (t) => {
+  const llm = new ScriptedLlm().onPlan((plan) =>
+    plan.finishPlan({ openings: [{ at: "12:00", intent: "점심 확인" }] }),
+  );
+  const app = await startWithUserTurn(
+    t,
+    async (turn) => {
+      const water = await turn.createGoal({ title: "물" });
+      const book = await turn.createGoal({ title: "책" });
+      await turn.reserveOpening({ at: "10:30", intent: "물 확인", goalIds: [water] });
+      await turn.reserveOpening({ at: "11:00", intent: "같이 확인", goalIds: [water, book] });
+    },
+    { llm },
+  );
+  await app.advanceTo("10:40");
+
+  await app.user("마셨어");
+  await app.advance({ seconds: 20 });
+
+  const input = app.llm.lastInput("turn");
+  assert.deepEqual(inputSection(input, "지금 개시 예약"), [
+    "- #2 2026-10-30 10:30 물 확인 [목표 1] (turn) 밀림",
+    "- #3 2026-10-30 11:00 같이 확인 [목표 1, 2] (turn)",
+    "- #1 2026-10-30 12:00 점심 확인 (plan)",
+  ]);
+  assert.deepEqual(
+    inputSection(input, "지금 활성 목표").filter((line) => line.startsWith("- ")),
+    ["- #1 물 (sample, 개시 예약 #2, #3)", "- #2 책 (sample, 개시 예약 #3)"],
+  );
+});
+
+test("58a: 하네스가 잡은 후속 확인은 (harness)로 나온다", async (t) => {
+  const llm = new ScriptedLlm().onTurn(async (turn) => {
+    await turn.createGoal({ title: "물" });
+    return turn.end("이따 봐");
+  });
+  const app = await startApp(t, { llm });
+  await app.user("할 일 줘");
+  await app.advance({ seconds: 20 });
+
+  await app.user("하나 더");
+  await app.advance({ seconds: 20 });
+
+  assert.deepEqual(inputSection(app.llm.lastInput("turn"), "지금 개시 예약"), [
+    "- #1 2026-10-30 11:00 후속 확인 [목표 1] (harness)",
+  ]);
+});
+
+test("오늘 종료된 목표는 결과와 사유를 함께 보여 준다", async (t) => {
+  const { secondInput } = await secondTurnInput(t, async (turn) => {
+    for (const title of ["물", "책", "산책"]) await turn.createGoal({ title });
+    await turn.use("goal_close", { goal_id: 1, result: "done", reason: "2리터 마심" });
+    await turn.use("goal_close", { goal_id: 2, result: "failed", reason: "10쪽에서 멈춤" });
+    await turn.use("goal_close", { goal_id: 3, result: "dropped", reason: "비가 옴" });
+  });
+
+  assert.deepEqual(inputSection(secondInput, "오늘 종료된 목표"), [
+    "- #1 물 [done] 2리터 마심",
+    "- #2 책 [failed] 10쪽에서 멈춤",
+    "- #3 산책 [dropped] 비가 옴",
+  ]);
+  assert.deepEqual(inputSection(secondInput, "지금 활성 목표"), ["(없음)"]);
+});
+
+test("61a, 90d: 턴 입력의 기억은 state 전문과 칸 제목뿐이고, 정리가 쓴 기억이 다음 턴에 보인다", async (t) => {
+  const llm = new ScriptedLlm()
+    .onTurn((turn) => turn.end("잘 가"))
+    .onCleanup(async (cleanup) => {
+      await cleanup.use("state_write", { content: "오늘은 일찍 끝냄" });
+      await cleanup.use("memory_write", { title: "습관", content: "6시에 일어난다" });
+      await cleanup.use("memory_write", { title: "약점", content: "저녁에 늘어진다" });
+    });
+  const app = await startApp(t, { llm });
+  await app.user("오늘 끝");
+  await app.advance({ seconds: 20 });
+
+  await app.user("하나만 더");
+  await app.advance({ seconds: 20 });
+
+  const input = app.llm.lastInput("turn");
+  assert.deepEqual(inputSection(input, "기억"), ["오늘은 일찍 끝냄", "칸: 습관, 약점"]);
+  assert.ok(!input.includes("6시에 일어난다"));
 });

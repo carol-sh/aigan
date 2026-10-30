@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DurationLike } from "luxon";
 import { Gate } from "../fakes/gate.ts";
-import { ScriptedLlm } from "../fakes/scripted-llm.ts";
+import { ScriptedLlm, inputSection } from "../fakes/scripted-llm.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
 function continueReservation(app: TestApp) {
@@ -195,4 +195,179 @@ test("48j: 조용히 기다린 답장 턴의 io 중에 이어가기가 발화했
     "10-30 10:09 turn:reply",
     "10-30 10:15 turn:continue",
   ]);
+});
+
+test("답장 턴과 이어가기 턴은 계기가 다르고, 사용자가 연 흐름은 개시 의도가 (없음)이다", async (t) => {
+  const llm = new ScriptedLlm().onTurn(
+    (turn) => turn.say("응", { continueAfter: { minutes: 10 } }),
+    (turn) => turn.say("그래", { continueAfter: { minutes: 10 } }),
+    (turn) => turn.end("이만"),
+  );
+  const app = await startApp(t, { llm });
+  await app.user("시작");
+  await app.advance({ seconds: 20 });
+  await app.user("하나 더");
+  await app.advance({ seconds: 20 });
+
+  await app.advanceTo("10:11");
+
+  const events = app.llm.inputs("turn").map((input) => inputSection(input, "이벤트").slice(0, 2));
+  assert.deepEqual(events, [
+    ["계기: 사용자 메시지(흐름 없음)", "개시 의도: (없음)"],
+    ["계기: 사용자 답장", "개시 의도: (없음)"],
+    ["계기: 이어가기", "개시 의도: (없음)"],
+  ]);
+});
+
+test("같은 흐름의 다음 턴 입력은 도구가 예약을 바꿔도 흐름 대화 끝까지 앞 턴 입력과 글자가 같다", async (t) => {
+  const llm = new ScriptedLlm().onTurn(
+    (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
+    async (turn) => {
+      await turn.createGoal({ title: "물" });
+      await turn.reserveOpening({ at: "15:00", intent: "물 확인", goalIds: [1] });
+      return turn.say("3시에 볼게", { continueAfter: { hours: 1 } });
+    },
+    (turn) => turn.say("그래", { continueAfter: { hours: 1 } }),
+  );
+  const app = await startApp(t, { llm });
+  await app.user("시작");
+  await app.advance({ seconds: 20 });
+  await app.user("물 마실게");
+  await app.advance({ seconds: 20 });
+
+  await app.user("알았어");
+  await app.advance({ seconds: 20 });
+
+  const [, reservingTurn, nextTurn] = app.llm
+    .requestsOf("turn")
+    .filter((request) => request.messages.length === 2);
+  const stablePrefix = String(reservingTurn!.messages[1]!.content).split(
+    "\n\n## 지금 활성 목표",
+  )[0]!;
+  assert.ok(stablePrefix.includes("## 흐름 대화"));
+  assert.ok(String(nextTurn!.messages[1]!.content).startsWith(stablePrefix));
+  assert.deepEqual(nextTurn!.messages[0], reservingTurn!.messages[0]);
+});
+
+test("48a, 48c: 방금 닫힌 흐름의 꼬리가 다음 흐름의 판정 턴과 그 흐름의 모든 턴에 나온다", async (t) => {
+  const llm = new ScriptedLlm().onTurn(
+    (turn) => turn.end("4시에 보자"),
+    (turn) => turn.say("회의 중이라며", { continueAfter: { minutes: 10 } }),
+    (turn) => turn.end("4시에 봐"),
+  );
+  const app = await startApp(t, { llm });
+  await app.user("회의 들어가야 돼");
+  await app.advance({ seconds: 20 });
+  await app.advanceTo("10:30");
+  await app.user("고양이 봤음?");
+  await app.advance({ seconds: 20 });
+
+  await app.advanceTo("10:41");
+
+  const [, judgingTurn, continueTurn] = app.llm.inputs("turn");
+  const tail = ["10:00 종료", "[10:00] 사용자: 회의 들어가야 돼", "[10:00] 나: 4시에 보자"];
+  assert.deepEqual(inputSection(judgingTurn!, "직전 흐름"), tail);
+  assert.deepEqual(inputSection(continueTurn!, "직전 흐름"), tail);
+});
+
+test("48b: 직전 흐름이 prev_flow_tail_max_age_sec보다 전에 닫혔으면 꼬리가 없다", async (t) => {
+  const llm = new ScriptedLlm().onTurn((turn) => turn.end("잘 자"));
+  const app = await startApp(t, { at: "2026-10-29 21:00", llm });
+  await app.user("잘게");
+  await app.advance({ seconds: 20 });
+  await app.advanceTo("2026-10-30 09:00");
+
+  await app.user("좋은 아침");
+  await app.advance({ seconds: 20 });
+
+  assert.deepEqual(inputSection(app.llm.lastInput("turn"), "직전 흐름"), ["(없음)"]);
+});
+
+test("48d: 계획이 아직 돌지 않았으면 오늘 계획은 (계획 전)이고, 돈 뒤에는 본문이다", async (t) => {
+  const llm = new ScriptedLlm().onPlan(
+    (plan) => plan.failPlan(),
+    (plan) => plan.finishPlan({ body: "오전에 글쓰기, 오후에 산책" }),
+  );
+  const app = await startApp(t, { llm });
+  await app.user("안녕");
+  await app.advance({ seconds: 20 });
+  const beforePlan = app.llm.lastInput("turn");
+  await app.advanceTo("10:11");
+
+  await app.user("뭐 해?");
+  await app.advance({ seconds: 20 });
+
+  assert.deepEqual(inputSection(beforePlan, "오늘 계획"), ["(계획 전)"]);
+  assert.deepEqual(inputSection(app.llm.lastInput("turn"), "오늘 계획"), [
+    "오전에 글쓰기, 오후에 산책",
+  ]);
+});
+
+const NIGHT_BLACKOUT = { blackout: "23:00-07:00" };
+
+test("48e: 블랙아웃 직전에 닫힌 흐름에 블랙아웃 중 답하면, 아침 판정 턴이 메시지 시각 기준으로 그 꼬리를 본다", async (t) => {
+  const llm = new ScriptedLlm().onTurn((turn) =>
+    turn.say("뭐 할래?", { continueAfter: { minutes: 30 } }),
+  );
+  const app = await startApp(t, { at: "2026-10-30 22:50", config: NIGHT_BLACKOUT, llm });
+  await app.user("내일 첫 할 일 정해");
+  await app.advance({ seconds: 20 });
+  await app.advanceTo("23:06");
+  await app.user("운동");
+
+  await app.advanceTo("2026-10-31 07:01");
+
+  const input = app.llm.lastInput("turn");
+  assert.deepEqual(inputSection(input, "직전 흐름"), [
+    "10-30 23:00 종료",
+    "[10-30 22:50] 사용자: 내일 첫 할 일 정해",
+    "[10-30 22:50] 나: 뭐 할래?",
+  ]);
+  assert.deepEqual(inputSection(input, "흐름 밖 메시지"), ["[10-30 23:06] 사용자: 운동"]);
+});
+
+test("48f: 48e의 답을 아침 첫 AI 개시 턴이 흡수하면 그 흐름의 모든 턴이 같은 꼬리를 본다", async (t) => {
+  const llm = new ScriptedLlm()
+    .onPlan(
+      (plan) => plan.finishPlan(),
+      (plan) => plan.finishPlan({ openings: [{ at: "2026-10-31 07:00", intent: "아침 할 일" }] }),
+    )
+    .onTurn(
+      (turn) => turn.say("뭐 할래?", { continueAfter: { minutes: 30 } }),
+      (turn) => turn.say("운동 좋다", { continueAfter: { minutes: 10 } }),
+      (turn) => turn.end("다녀와"),
+    );
+  const app = await startApp(t, { at: "2026-10-30 22:50", config: NIGHT_BLACKOUT, llm });
+  await app.user("내일 첫 할 일 정해");
+  await app.advance({ seconds: 20 });
+  await app.advanceTo("23:06");
+  await app.user("운동");
+
+  await app.advanceTo("2026-10-31 07:11");
+
+  const [, openingTurn, continueTurn] = app.llm.inputs("turn");
+  for (const input of [openingTurn!, continueTurn!]) {
+    assert.deepEqual(inputSection(input, "직전 흐름")[0], "10-30 23:00 종료");
+  }
+  assert.ok(inputSection(continueTurn!, "흐름 대화").includes("[10-30 23:06] 사용자: 운동"));
+});
+
+test("48g: 블랙아웃 시작 직전 디바운스 중에 온 말은 닫힌 흐름보다 이르지만 아침 판정 턴이 그 흐름의 꼬리를 본다", async (t) => {
+  const llm = new ScriptedLlm().onTurn((turn) => turn.say("응", { continueAfter: { hours: 1 } }));
+  const app = await startApp(t, { at: "2026-10-30 22:30", config: NIGHT_BLACKOUT, llm });
+  await app.user("시작");
+  await app.advance({ seconds: 20 });
+  await app.advanceTo("22:59");
+  await app.advance({ seconds: 50 });
+  await app.user("잠깐만");
+
+  await app.advanceTo("2026-10-31 07:01");
+
+  const input = app.llm.lastInput("turn");
+  assert.deepEqual(inputSection(input, "직전 흐름"), [
+    "10-30 23:00 종료",
+    "[10-30 22:30] 사용자: 시작",
+    "[10-30 22:30] 나: 응",
+  ]);
+  assert.deepEqual(inputSection(input, "흐름 밖 메시지"), ["[10-30 22:59] 사용자: 잠깐만"]);
 });
