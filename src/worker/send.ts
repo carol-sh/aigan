@@ -69,12 +69,13 @@ class PacedSender {
   }
 
   async #sendChunk(chunk: string): Promise<DeliveryOutcome> {
+    await this.#waitAfterPreviousMessage();
     let failedAttempts = 0;
     let rateLimitWaits = 0;
     while (true) {
-      await this.#waitBetweenMessages();
       try {
         await this.#ctx.telegram.sendMessage(chunk);
+        this.#hasSentBefore = true;
         return "delivered";
       } catch (error) {
         if (error instanceof TelegramError && error.isBlockedByUser) return "blockedByUser";
@@ -94,8 +95,7 @@ class PacedSender {
     }
   }
 
-  async #waitBetweenMessages(): Promise<void> {
+  async #waitAfterPreviousMessage(): Promise<void> {
     if (this.#hasSentBefore) await sleep(this.#ctx.clock, this.#ctx.config.send_interval_ms);
-    this.#hasSentBefore = true;
   }
 }

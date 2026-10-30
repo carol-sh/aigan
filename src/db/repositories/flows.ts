@@ -89,13 +89,13 @@ export class FlowRepository {
     endedAt: DateTime,
     cleanupStatus: "pending" | "skipped",
   ): void {
+    const cleanupNextAt = cleanupStatus === "pending" ? toDbTime(endedAt) : null;
     this.#db
       .prepare(
-        `UPDATE flows SET ended_at = ?, end_reason = ?, cleanup_status = ?, cleanup_attempts = 0,
-           cleanup_next_at = CASE WHEN ? = 'pending' THEN ? END
+        `UPDATE flows SET ended_at = ?, end_reason = ?, cleanup_status = ?, cleanup_attempts = 0, cleanup_next_at = ?
          WHERE id = ?`,
       )
-      .run(toDbTime(endedAt), reason, cleanupStatus, cleanupStatus, toDbTime(endedAt), flowId);
+      .run(toDbTime(endedAt), reason, cleanupStatus, cleanupNextAt, flowId);
   }
 
   recordCleanupAttempt(flowId: number, nextAt: DateTime): number {

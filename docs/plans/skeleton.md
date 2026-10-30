@@ -52,7 +52,7 @@ LLM 작업(턴·계획·정리)은 루프가 고르기만 하고, 실행은 주�
   - **Ports & Adapters**: 시계, 텔레그램, ChatClient는 `ports.ts`의 인터페이스다. 실물과 가짜는 어댑터다. 워커는 어댑터를 모른다.
   - **Repository**: SQL은 `db/repositories/` 안에만 둔다. 워커는 `flows.findOpen()`, `messages.findUnanswered(flow)`처럼 도메인 말로 읽는다.
   - **Unit of Work**: `inTransaction(db, () => ...)`. 흐름 닫기처럼 호출자 tx 안에서 돌아야 하는 연산은 중첩 호출이 바깥 tx에 합쳐진다. 나중에 TurnTx·MemoryTx도 같은 틀을 쓴다.
-  - **Command + handler map**: 작업은 판별 유니온 `Job`이고, 실행은 `kind`별 핸들러가 맡는다. LLM 작업 핸들러는 주입한다.
+  - **Command + handler map**: 작업은 판별 유니온 `Task`이고, 실행은 `kind`별 핸들러가 맡는다. LLM 작업 핸들러는 주입한다.
   - **Composition Root**: 의존성 조립은 `boot`에서 한 번만 한다. 나머지 코드는 생성자나 인자로 받는다. 전역 상태는 두지 않는다.
 - 테스트도 같은 기준이다. 테스트 이름은 정본 번호와 상황을 쓴다(`"74: 블랙아웃 진입 시 흐름이 닫히고 정리 → 계획 순으로 돈다"`). 본문은 주어진 상황 → 행동 → 기대 순으로 읽힌다.
 
@@ -60,7 +60,7 @@ LLM 작업(턴·계획·정리)은 루프가 고르기만 하고, 실행은 주�
 
 | 정본 | 코드 | 하는 일 |
 |---|---|---|
-| `select()` | `pickNextJob()` | DB 상태에서 다음 작업 하나를 고른다 |
+| `select()` | `pickNextTask()` | DB 상태에서 다음 작업 하나를 고른다. 안에서 쓰지 않고, LLM 없는 상태 전이도 작업으로 낸다 |
 | `next_deadline()` | `nextDeadline()` | 타이머를 맞출 다음 시각 |
 | 폴러 삽입 | `recordIncomingMessage(update)` | 텔레그램 update를 검사해 messages에 저장 |
 | 타이머 발화 | `fireDueReservations()` | 시각이 된 예약을 `fired`로 |
@@ -68,6 +68,8 @@ LLM 작업(턴·계획·정리)은 루프가 고르기만 하고, 실행은 주�
 | `settle()` | `scheduleFollowUpsForUncoveredGoals()` | I3 보정 예약 삽입 |
 | `rollover()` | `closePastPlanDays()` | 지난 계획일의 목표를 `expired`로, 예약을 삭제 |
 | `Close(f,'blackout')` | `closeFlowForBlackout` 작업 | |
+| 사전 검사 삭제 | `discardOpeningForClosedGoals` 작업 | 겨냥한 목표가 모두 끝난 개시 예약 삭제 |
+| 보류 해제 분기 | `checkHoldRecovery` 작업 | 해제 조건 확인 → 해제·재개 또는 재확인 시각 연기 |
 | `send_outbox()` | `sendOutbox()` | |
 | `try_release()` | `releaseHoldIfRecovered()` | |
 | `resume()` | `resumePendingWork()` | |
@@ -85,19 +87,26 @@ LLM 작업(턴·계획·정리)은 루프가 고르기만 하고, 실행은 주�
 - **Telegram 포트**: `sendMessage(text)`, `deleteMessage(id)`, `showTyping()`.
   - 오류는 `TelegramError { status, retryAfterSec? }` 하나로 받는다.
   - 롱폴링 구동부는 어댑터 단계로 미룬다. update 모양은 grammY `Update`에서 필요한 부분만 쓴다.
-- **Job**:
+- **Task**: 방침(`jobs/`, 코드에서는 `JobPolicy`)과 헷갈리지 않도록 루프의 작업 단위는 `Task`라고 부른다.
   ```ts
-  type Job =
+  type HarnessTask =
+    | { kind: "resumePendingWork" }
     | { kind: "closeFlowForBlackout"; flowId }
+    | { kind: "closePastPlanDays" }
+    | { kind: "discardOpeningForClosedGoals"; reservationId }
+    | { kind: "checkHoldRecovery" };
+  type LlmTask =
     | { kind: "turn"; trigger: "continue" | "reply"; flowId }
     | { kind: "turn"; trigger: "open"; reservationId }
     | { kind: "turn"; trigger: "user" }
     | { kind: "cleanup"; flowId }
     | { kind: "plan" };
   ```
-  - `closeFlowForBlackout`은 뼈대의 핸들러가 처리한다. 나머지는 주입한 `LlmJobHandlers`가 맡는다.
+  - `pickNextTask`는 읽기만 한다. 정본에서 `select`가 안에서 하던 쓰기(날 넘김, 사전 검사 삭제, 보류 해제)는 작업으로 낸다. 루프가 그 작업을 실행한 뒤 다시 고르므로 결과는 같다.
+  - `HarnessTask`는 `runTask`가 처리하고, `LlmTask`는 주입한 `LlmTaskHandlers`가 맡는다.
   - 작업이 끝나면 루프가 `sendOutbox()`를 부른다.
-- **루프** `JobLoop`: `start()`, `stop()`, `wake()`, `whenIdle()`, `stats`.
+  - 부팅의 `resume()`도 루프의 첫 작업(`resumePendingWork`)으로 돌린다. 그래서 전송 대기는 루프 안에서만 일어난다.
+- **루프** `TaskLoop`: `start()`, `stop()`, `wake()`, `whenIdle()`, `stats`.
   - 다음 타이머는 `MIN(nextDeadline, now + timer_max_sleep_sec)`.
   - 작업 중 `wake()`는 플래그만 세운다.
   - `whenIdle()`과 `stats`는 e2e 관찰용이다.
@@ -126,12 +135,12 @@ src/
 │   ├── timer.ts             # fireDueReservations
 │   └── deadline.ts          # nextDeadline
 └── worker/
-    ├── pick-next-job.ts
+    ├── pick-next-task.ts
     ├── flow.ts              # closeFlow, scheduleFollowUpsForUncoveredGoals, closePastPlanDays
     ├── send.ts              # sendOutbox, splitForTelegram
     ├── hold.ts              # releaseHold, releaseHoldIfRecovered
     ├── boot.ts              # boot(Composition Root), resumePendingWork
-    └── loop.ts              # JobLoop
+    └── loop.ts              # TaskLoop
 test/
 ├── rig.ts                   # startApp: e2e 구동기
 ├── fakes/{clock,telegram,llm-jobs}.ts
@@ -149,12 +158,12 @@ test/
 
 ## 테스트 전략
 
-**기본은 e2e.** spec 테스트는 내부 함수(`pickNextJob`, `nextDeadline`, `closeFlow`)를 직접 부르지 않는다. 앱을 실제로 부팅하고, 바깥 경계로만 넣고 본다.
+**기본은 e2e.** spec 테스트는 내부 함수(`pickNextTask`, `nextDeadline`, `closeFlow`)를 직접 부르지 않는다. 앱을 실제로 부팅하고, 바깥 경계로만 넣고 본다.
 
 - **구동** `startApp(opts)`:
   - 임시 `DATA_DIR`를 만들고 config와 `examples/prompts` 복사본을 넣는다.
   - 실제 `boot()`를 부른다(파일 DB, 잠금, 마이그레이션, 재개).
-  - 실제 `JobLoop`를 돌린다.
+  - 실제 `TaskLoop`를 돌린다.
   - 가짜는 경계 셋뿐이다: 시계, 텔레그램, LLM 작업 핸들러.
 - **입력**(모두 실제 경로를 탄다):
   - `user(text)`: 가짜 텔레그램 update로 넣는다. `recordIncomingMessage`를 거친 뒤 `wake()`가 불린다.
@@ -199,7 +208,7 @@ e2e 구동기를 일찍 세운다. 이후 기능은 e2e 테스트를 먼저 쓰�
 1. **config·ports·time**: 순수 함수와 단위 테스트.
 2. **db·프롬프트·부팅·루프 골격**:
    - 저장소, 트랜잭션, 잠금, 프롬프트 검증, `boot`.
-   - 빈 고르기로 도는 `JobLoop`, rig와 가짜들.
+   - 빈 고르기로 도는 `TaskLoop`, rig와 가짜들.
    - e2e: 3, 4. "할 일이 없으면 `timer_max_sleep_sec`마다 깨고 LLM 작업이 없다"(22의 뼈대).
 3. **수신·타이머·기한**: e2e 11.2와 11.3의 기한·디바운스 행(14, 17, 19, 20, 21, 22, 22a).
 4. **흐름 연산과 고르기 전체**: e2e 11.3 나머지와 11.9, 11.9a.
