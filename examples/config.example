@@ -1,0 +1,48 @@
+# aigan 설정. DATA_DIR/config로 복사해서 쓴다. 키와 의미는 docs/harness-design.md §9.9.
+# 바꾸면 재시작해야 반영된다.
+
+# 연결
+provider=openai
+model=
+api_key=
+bot_token=
+owner_chat_id=
+daily_call_limit=
+# provider=deepseek일 때만
+balance_threshold=
+balance_retry_sec=
+
+# 시간
+timezone=Asia/Seoul
+blackout=00:00-08:00
+message_debounce_sec=20
+min_lead_sec=60
+continue_default_sec=600
+orphan_goal_delay_sec=3600
+stale_after_sec=1800
+send_interval_ms=800
+timer_max_sleep_sec=60
+
+# 실패
+failure_backoff_first_sec=600
+failure_backoff_cap_sec=7200
+failure_alert_after=3
+turn_max_attempts=3
+cleanup_max_attempts=5
+cleanup_backoff_first_sec=30
+cleanup_backoff_cap_sec=300
+max_tool_rounds=3
+max_cleanup_tool_rounds=5
+
+# 상한
+goal_max_active=8
+open_max_pending=6
+outside_messages_max=20
+prev_flow_tail_messages=6
+prev_flow_tail_max_age_sec=10800
+recent_goal_days=7
+flow_compact_chars=24000
+cleanup_raw_max_chars=60000
+state_max_chars=1000
+memory_section_max_chars=8000
+memory_max_sections=10
