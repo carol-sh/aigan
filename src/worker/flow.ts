@@ -4,6 +4,7 @@ import type { FlowEndReason } from "../db/repositories/flows.ts";
 import type { Goal } from "../db/repositories/goals.ts";
 import { type PlanDate, fromDbTime } from "../time.ts";
 import type { HarnessContext } from "./context.ts";
+import { earliestOpeningAt, hasTimeLeftForOpening } from "./reservation-times.ts";
 
 export function closeFlow(ctx: HarnessContext, flowId: number, reason: FlowEndReason): void {
   inTransaction(ctx.db, () => {
@@ -53,19 +54,14 @@ function followUpTimeFor(
   planDate: PlanDate,
   now: DateTime,
 ): DateTime | undefined {
-  const minLead = { seconds: ctx.config.min_lead_sec };
-  const endOfDay = ctx.calendar.endOfDay(planDate);
+  if (!hasTimeLeftForOpening(ctx, planDate, now)) return undefined;
+  const latestAt = ctx.calendar.endOfDay(planDate).minus({ seconds: ctx.config.min_lead_sec });
   const dueAt = goal.due_at === null ? undefined : fromDbTime(goal.due_at);
-  const preferred =
+  const preferredAt =
     dueAt !== undefined && dueAt > now
       ? dueAt
       : now.plus({ seconds: ctx.config.orphan_goal_delay_sec });
-  const at = DateTime.max(
-    DateTime.min(preferred, endOfDay.minus(minLead)),
-    now.plus(minLead),
-    ctx.calendar.blackoutEndOf(planDate),
-  );
-  return at < endOfDay ? at : undefined;
+  return DateTime.max(DateTime.min(preferredAt, latestAt), earliestOpeningAt(ctx, planDate, now));
 }
 
 export function hasLeftoversFromPastPlanDays(

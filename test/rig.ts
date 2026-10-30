@@ -65,7 +65,7 @@ export class TestApp {
       clock: this.clock,
       telegram: this.telegram,
       logger: this.logger,
-      createLlmTaskHandlers: (ctx) => this.llm.handlersFor(ctx),
+      createDeciders: (ctx) => this.llm.decidersFor(ctx),
     });
     this.#harness.start();
     await flushAsyncWork();
@@ -106,16 +106,17 @@ export class TestApp {
     return parseLocalTime(localTime, TIMEZONE, this.clock.now());
   }
 
-  /** LLM 작업 기록을 `MM-dd HH:mm 종류[:트리거][#개시 예약 id]`로. */
+  /** LLM 작업 기록을 `MM-dd HH:mm 종류[:트리거][#개시 예약 id][:reconsider]`로. */
   get llmTasks(): string[] {
-    return this.llm.log.map(({ task, startedAt }) => {
+    return this.llm.log.map(({ task, startedAt, isReconsider }) => {
       const label =
         task.kind !== "turn"
           ? task.kind
           : task.trigger === "open"
             ? `turn:open#${task.reservationId}`
             : `turn:${task.trigger}`;
-      return `${startedAt.setZone(TIMEZONE).toFormat("MM-dd HH:mm")} ${label}`;
+      const time = startedAt.setZone(TIMEZONE).toFormat("MM-dd HH:mm");
+      return `${time} ${label}${isReconsider ? ":reconsider" : ""}`;
     });
   }
 

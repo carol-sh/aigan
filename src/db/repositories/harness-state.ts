@@ -52,6 +52,16 @@ export class HarnessStateRepository {
       .run();
   }
 
+  resetTurnFailures(): void {
+    this.#db
+      .prepare(
+        `UPDATE harness_state
+         SET failure_count = 0, output_fail_count = 0, output_fail_key = NULL, turn_retry_at = NULL
+         WHERE id = 1`,
+      )
+      .run();
+  }
+
   recordPlanAttempt(retryAt: DateTime): void {
     this.#db
       .prepare(

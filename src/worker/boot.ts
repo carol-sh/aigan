@@ -10,14 +10,23 @@ import { loadPrompts } from "../prompts.ts";
 import { PlanCalendar } from "../time.ts";
 import type { HarnessContext } from "./context.ts";
 import { TaskLoop } from "./loop.ts";
-import type { LlmTaskHandlers } from "./tasks.ts";
+import { type CleanupDecider, runCleanup } from "./cleanup.ts";
+import type { PlanTask } from "./tasks.ts";
+import { type TurnDecider, runTurn } from "./turn.ts";
 
 export interface BootOptions {
   dataDir: string;
   clock: Clock;
   telegram: Telegram;
   logger: Logger;
-  createLlmTaskHandlers(ctx: HarnessContext): LlmTaskHandlers;
+  createDeciders(ctx: HarnessContext): Deciders;
+}
+
+/** LLM이 들어갈 자리. 계획은 아직 결정자로 나누지 않아 작업 통째로 받는다. */
+export interface Deciders {
+  turn: TurnDecider;
+  cleanup: CleanupDecider;
+  plan(task: PlanTask): Promise<void>;
 }
 
 export interface Harness {
@@ -50,7 +59,12 @@ export function boot(options: BootOptions): Harness {
     telegram: options.telegram,
     logger: options.logger,
   };
-  const loop = new TaskLoop(ctx, options.createLlmTaskHandlers(ctx));
+  const deciders = options.createDeciders(ctx);
+  const loop = new TaskLoop(ctx, {
+    turn: (task) => runTurn(ctx, deciders.turn, task),
+    cleanup: (task) => runCleanup(ctx, deciders.cleanup, task),
+    plan: (task) => deciders.plan(task),
+  });
 
   return {
     ctx,

@@ -4,9 +4,9 @@ import { ScriptedLlm } from "../fakes/llm-tasks.ts";
 import { startApp } from "../rig.ts";
 
 test("70: 블랙아웃 시작에 미응답 없는 흐름은 LLM 없이 닫히고, 지난 계획일의 목표에는 후속 확인을 잡지 않는다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((c) => {
-    c.openFlow({ say: "물 마셔", continueAfter: { hours: 2 } });
-    c.createGoal({ title: "물 한 잔" });
+  const llm = new ScriptedLlm().onTurn((turn) => {
+    turn.createGoal({ title: "물 한 잔" });
+    return turn.say("물 마셔", { continueAfter: { hours: 2 } });
   });
   const app = await startApp(t, { at: "2026-10-30 23:00", llm });
   await app.user("응");
@@ -28,9 +28,7 @@ test("70: 블랙아웃 시작에 미응답 없는 흐름은 LLM 없이 닫히고
 });
 
 test("71: 미응답이 디바운스 중이어도 흐름을 닫고, 그 메시지는 판정 대기로 남아 블랙아웃이 끝나면 판정된다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((c) =>
-    c.openFlow({ say: "응", continueAfter: { hours: 2 } }),
-  );
+  const llm = new ScriptedLlm().onTurn((turn) => turn.say("응", { continueAfter: { hours: 2 } }));
   const app = await startApp(t, { at: "2026-10-30 23:00", llm });
   await app.user("시작");
   await app.advanceTo("23:59");
@@ -52,7 +50,7 @@ test("71: 미응답이 디바운스 중이어도 흐름을 닫고, 그 메시지
 });
 
 test("72, 117: 블랙아웃 중 재시작에서 발화한 개시 예약은 지난 계획일 것이라 날 넘김이 지우고 턴은 없다", async (t) => {
-  const llm = new ScriptedLlm().onPlan((c) => c.finishPlan({ openings: [{ at: "23:50" }] }));
+  const llm = new ScriptedLlm().onPlan((plan) => plan.finishPlan({ openings: [{ at: "23:50" }] }));
   const app = await startApp(t, { llm });
   await app.advanceTo("23:40");
 
@@ -63,9 +61,9 @@ test("72, 117: 블랙아웃 중 재시작에서 발화한 개시 예약은 지�
 });
 
 test("72a: 흐름이 열린 채 밤새 절전했다 깨어나면 이어가기 없이 흐름을 닫고 정리 → 날 넘김 → 계획", async (t) => {
-  const llm = new ScriptedLlm().onTurn((c) => {
-    c.openFlow({ say: "응", continueAfter: { minutes: 30 } });
-    c.createGoal({ title: "스트레칭" });
+  const llm = new ScriptedLlm().onTurn((turn) => {
+    turn.createGoal({ title: "스트레칭" });
+    return turn.say("응", { continueAfter: { minutes: 30 } });
   });
   const app = await startApp(t, { at: "2026-10-30 22:00", llm });
   await app.user("시작");
@@ -91,15 +89,15 @@ test("74: 블랙아웃 진입 시 흐름이 열려 있으면 닫기 → 정리 �
   const goalStatesSeenByPlan: unknown[] = [];
   const llm = new ScriptedLlm()
     .onPlan(
-      (c) => c.finishPlan(),
-      (c) => {
+      (plan) => plan.finishPlan(),
+      (plan) => {
         goalStatesSeenByPlan.push(...app.rows("SELECT state FROM goals"));
-        c.finishPlan();
+        plan.finishPlan();
       },
     )
-    .onTurn((c) => {
-      c.openFlow({ say: "책 읽자", continueAfter: { hours: 3 } });
-      c.createGoal({ title: "책 30쪽" });
+    .onTurn((turn) => {
+      turn.createGoal({ title: "책 30쪽" });
+      return turn.say("책 읽자", { continueAfter: { hours: 3 } });
     });
   const app = await startApp(t, { at: "2026-10-30 22:00", llm });
   await app.user("응");

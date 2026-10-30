@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { ScriptedLlm } from "../fakes/llm-tasks.ts";
 import { startApp } from "../rig.ts";
 
-const neverFinishes = () => new Promise(() => {});
+const neverFinishes = () => new Promise<never>(() => {});
 
 test("113: 디바운스 대기 중에 재시작하면, 기한이 지났으면 바로 턴을 돈다", async (t) => {
   const app = await startApp(t);
@@ -17,7 +17,7 @@ test("113: 디바운스 대기 중에 재시작하면, 기한이 지났으면 �
 });
 
 test("114: 턴 io 중에 죽으면 커밋 전이라 아무것도 바뀌지 않고 같은 작업을 다시 돈다", async (t) => {
-  const llm = new ScriptedLlm().onTurn(neverFinishes, (c) => c.openFlow({ say: "응" }));
+  const llm = new ScriptedLlm().onTurn(neverFinishes, (turn) => turn.say("응"));
   const app = await startApp(t, { llm });
   await app.user("안녕");
   await app.advance({ seconds: 20 });
@@ -38,9 +38,7 @@ test("114: 턴 io 중에 죽으면 커밋 전이라 아무것도 바뀌지 않�
 });
 
 test("115: 열린 흐름에 이어가기 예약이 없으면 복구 예약을 넣고 실패 횟수는 그대로다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((c) =>
-    c.openFlow({ say: "응", continueAfter: { hours: 1 } }),
-  );
+  const llm = new ScriptedLlm().onTurn((turn) => turn.say("응", { continueAfter: { hours: 1 } }));
   const app = await startApp(t, { llm });
   await app.user("안녕");
   await app.advance({ seconds: 20 });
@@ -57,9 +55,9 @@ test("115: 열린 흐름에 이어가기 예약이 없으면 복구 예약을 �
 });
 
 test("116: 이어가기 예약이 낡았으면 흐름을 stale로 닫고, 미응답은 판정 대기로, 목표에는 후속 확인을 잡는다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((c) => {
-    c.openFlow({ say: "물 마셔", continueAfter: { minutes: 30 } });
-    c.createGoal({ title: "물 한 잔" });
+  const llm = new ScriptedLlm().onTurn((turn) => {
+    turn.createGoal({ title: "물 한 잔" });
+    return turn.say("물 마셔", { continueAfter: { minutes: 30 } });
   });
   const app = await startApp(t, { llm });
   await app.user("안녕");
@@ -85,10 +83,10 @@ test("116: 이어가기 예약이 낡았으면 흐름을 stale로 닫고, 미응
 test("118: 정리 대기로 재시작하면 cleanup_next_at에 다시 시도한다", async (t) => {
   const llm = new ScriptedLlm()
     .onTurn(
-      (c) => c.openFlow({ say: "응", continueAfter: { minutes: 1 } }),
-      (c) => c.endFlow({ say: "끝" }),
+      (turn) => turn.say("응", { continueAfter: { minutes: 1 } }),
+      (turn) => turn.end("끝"),
     )
-    .onCleanup((c) => c.failCleanup());
+    .onCleanup((cleanup) => cleanup.fail());
   const app = await startApp(t, { llm });
   await app.user("안녕");
   await app.advanceTo("10:01");
@@ -106,13 +104,12 @@ test("118: 정리 대기로 재시작하면 cleanup_next_at에 다시 시도한�
 test("119: 며칠 다운 뒤에는 지난 개시 예약을 지우고 지난 목표를 닫은 다음 계획이 오늘 것을 새로 잡는다", async (t) => {
   const llm = new ScriptedLlm()
     .onPlan(
-      (c) => c.finishPlan({ openings: [{ at: "15:00" }, { at: "16:00" }] }),
-      (c) => c.finishPlan({ openings: [{ at: "15:00" }] }),
+      (plan) => plan.finishPlan({ openings: [{ at: "15:00" }, { at: "16:00" }] }),
+      (plan) => plan.finishPlan({ openings: [{ at: "15:00" }] }),
     )
-    .onTurn((c) => {
-      c.openFlow({ say: "목표" });
-      c.createGoal({ title: "운동" });
-      c.endFlow();
+    .onTurn((turn) => {
+      turn.createGoal({ title: "운동" });
+      return turn.end("목표");
     });
   const app = await startApp(t, { llm });
   await app.user("운동할래");

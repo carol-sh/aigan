@@ -20,6 +20,8 @@ export interface Goal {
 }
 
 export interface NewGoal {
+  /** 턴이 도구 결과로 미리 알려 준 id. 없으면 SQLite가 정한다. */
+  id?: number;
   jobId: string;
   jobSnapshot: string;
   title: string;
@@ -43,10 +45,11 @@ export class GoalRepository {
   create(goal: NewGoal): number {
     const result = this.#db
       .prepare(
-        `INSERT INTO goals (job_id, job_snapshot, title, done_criteria, due_at, plan_date, state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
+        `INSERT INTO goals (id, job_id, job_snapshot, title, done_criteria, due_at, plan_date, state, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
       )
       .run(
+        goal.id ?? null,
         goal.jobId,
         goal.jobSnapshot,
         goal.title,
@@ -56,6 +59,28 @@ export class GoalRepository {
         toDbTime(goal.createdAt),
       );
     return Number(result.lastInsertRowid);
+  }
+
+  findActive(): Goal[] {
+    return this.#db
+      .prepare("SELECT * FROM goals WHERE state = 'active' ORDER BY id")
+      .all() as unknown as Goal[];
+  }
+
+  maxId(): number {
+    const row = this.#db.prepare("SELECT MAX(id) AS id FROM goals").get() as { id: number | null };
+    return row.id ?? 0;
+  }
+
+  update(goalId: number, changes: { progress?: string; dueAt?: DateTime }): void {
+    if (changes.progress !== undefined) {
+      this.#db.prepare("UPDATE goals SET progress = ? WHERE id = ?").run(changes.progress, goalId);
+    }
+    if (changes.dueAt !== undefined) {
+      this.#db
+        .prepare("UPDATE goals SET due_at = ? WHERE id = ?")
+        .run(toDbTime(changes.dueAt), goalId);
+    }
   }
 
   close(

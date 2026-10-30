@@ -16,8 +16,8 @@ function sleepingUntil(app: TestApp): string | undefined {
 
 test("13: 밀린 개시 예약과 디바운스가 지난 판정 대기가 함께 있으면 개시 턴 하나만 돈다", async (t) => {
   const llm = new ScriptedLlm()
-    .onPlan((c) => c.finishPlan({ openings: [{ at: "08:00" }] }))
-    .onTurn((c) => c.openFlow({ say: "아침이야", continueAfter: { hours: 1 } }));
+    .onPlan((plan) => plan.finishPlan({ openings: [{ at: "08:00" }] }))
+    .onTurn((turn) => turn.say("아침이야", { continueAfter: { hours: 1 } }));
   const app = await startApp(t, { at: "2026-10-30 07:00", llm });
   await app.user("밤에 할 말");
 
@@ -27,7 +27,7 @@ test("13: 밀린 개시 예약과 디바운스가 지난 판정 대기가 함께
 });
 
 test("14: 판정 대기가 디바운스 중이면 밀린 개시 예약도 만료까지 기다린다 (L3)", async (t) => {
-  const llm = new ScriptedLlm().onPlan((c) => c.finishPlan({ openings: [{ at: "10:30" }] }));
+  const llm = new ScriptedLlm().onPlan((plan) => plan.finishPlan({ openings: [{ at: "10:30" }] }));
   const app = await startApp(t, { llm });
   await app.advanceTo("10:29");
   await app.advance({ seconds: 55 });
@@ -41,13 +41,15 @@ test("14: 판정 대기가 디바운스 중이면 밀린 개시 예약도 만료
 
 test("15: 밀린 개시 예약 셋은 at, id 순으로 하나씩, 앞 흐름이 닫히고 정리가 끝난 뒤 돈다", async (t) => {
   const llm = new ScriptedLlm()
-    .onPlan((c) => c.finishPlan({ openings: [{ at: "08:30" }, { at: "08:00" }, { at: "08:00" }] }))
+    .onPlan((plan) =>
+      plan.finishPlan({ openings: [{ at: "08:30" }, { at: "08:00" }, { at: "08:00" }] }),
+    )
     .onTurn(
-      (c) => c.openFlow({ say: "첫째", continueAfter: { hours: 1 } }),
-      (c) => c.endFlow({ say: "끝" }),
-      (c) => c.openFlow({ say: "둘째", continueAfter: { minutes: 30 } }),
-      (c) => c.endFlow({ say: "끝" }),
-      (c) => c.openFlow({ say: "셋째", continueAfter: { minutes: 30 } }),
+      (turn) => turn.say("첫째", { continueAfter: { hours: 1 } }),
+      (turn) => turn.end("끝"),
+      (turn) => turn.say("둘째", { continueAfter: { minutes: 30 } }),
+      (turn) => turn.end("끝"),
+      (turn) => turn.say("셋째", { continueAfter: { minutes: 30 } }),
     );
   const app = await startApp(t, { at: "2026-10-30 07:00", llm });
 
@@ -67,12 +69,12 @@ test("15: 밀린 개시 예약 셋은 at, id 순으로 하나씩, 앞 흐름이 
 
 test("16: 정리가 밀린 개시·판정보다 먼저고, 정리 재시도를 기다리는 동안 어떤 턴도 돌지 않는다. 말 없는 개시 턴 뒤에 판정이 돈다", async (t) => {
   const llm = new ScriptedLlm()
-    .onPlan((c) => c.finishPlan({ openings: [{ at: "10:20" }] }))
+    .onPlan((plan) => plan.finishPlan({ openings: [{ at: "10:20" }] }))
     .onTurn(
-      (c) => c.openFlow({ say: "그래", continueAfter: { minutes: 30 } }),
-      (c) => c.endFlow({ say: "그럼 이만" }),
+      (turn) => turn.say("그래", { continueAfter: { minutes: 30 } }),
+      (turn) => turn.end("그럼 이만"),
     )
-    .onCleanup((c) => c.failCleanup());
+    .onCleanup((cleanup) => cleanup.fail());
   const app = await startApp(t, { llm });
   await app.user("얘기 좀 하자");
   await app.advanceTo("10:30");
@@ -97,7 +99,7 @@ test("16: 정리가 밀린 개시·판정보다 먼저고, 정리 재시도를 �
 });
 
 test("17: 계획이 밀려도 판정 대기가 디바운스 중이면 계획도 기다린다", async (t) => {
-  const llm = new ScriptedLlm().onPlan((c) => c.failPlan());
+  const llm = new ScriptedLlm().onPlan((plan) => plan.failPlan());
   const app = await startApp(t, { llm });
   await app.advanceTo("10:09");
   await app.advance({ seconds: 50 });
@@ -110,10 +112,10 @@ test("17: 계획이 밀려도 판정 대기가 디바운스 중이면 계획도 
 
 test("18: 흐름이 열린 동안 밀린 계획은 흐름이 닫히고 정리가 끝난 뒤 돌고, 그동안 바쁜 루프가 없다 (L1)", async (t) => {
   const llm = new ScriptedLlm()
-    .onPlan((c) => c.failPlan())
+    .onPlan((plan) => plan.failPlan())
     .onTurn(
-      (c) => c.openFlow({ say: "응", continueAfter: { hours: 1 } }),
-      (c) => c.endFlow({ say: "이만" }),
+      (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
+      (turn) => turn.end("이만"),
     );
   const app = await startApp(t, { llm, config: { timer_max_sleep_sec: ONE_DAY_SEC } });
   await app.user("시작");
@@ -135,8 +137,8 @@ test("18: 흐름이 열린 동안 밀린 계획은 흐름이 닫히고 정리가
 
 test("18a: 이어가기가 블랙아웃 시작 뒤까지 턴 백오프에 막혀도 블랙아웃 시작에 흐름을 닫는다", async (t) => {
   const llm = new ScriptedLlm()
-    .onPlan((c) => c.failPlan())
-    .onTurn((c) => c.openFlow({ say: "응", continueAfter: { hours: 1 } }));
+    .onPlan((plan) => plan.failPlan())
+    .onTurn((turn) => turn.say("응", { continueAfter: { hours: 1 } }));
   const app = await startApp(t, {
     at: "2026-10-30 22:00",
     llm,
@@ -196,9 +198,9 @@ test("20: 보류 중이면 디바운스가 지난 메시지가 있어도 다음 
 test("21: 작업 중 wake()는 무시되고, 작업이 끝나면 그동안 온 메시지를 다음 작업으로 고른다", async (t) => {
   let finishTurn = () => {};
   const turnMayFinish = new Promise<void>((resolve) => (finishTurn = resolve));
-  const llm = new ScriptedLlm().onTurn(async (c) => {
+  const llm = new ScriptedLlm().onTurn(async (turn) => {
     await turnMayFinish;
-    c.openFlow({ say: "응", continueAfter: { hours: 1 } });
+    return turn.say("응", { continueAfter: { hours: 1 } });
   });
   const app = await startApp(t, { llm });
   await app.user("시작");
@@ -231,7 +233,7 @@ test("22: 기한 후보가 없는 blocked 보류에서는 timer_max_sleep_sec마
 });
 
 test("22a: 기한까지 깨어 있는 동안 기기가 절전해도 깨어난 뒤 timer_max_sleep_sec 안에 기한이 지난 작업을 한다", async (t) => {
-  const llm = new ScriptedLlm().onPlan((c) => c.finishPlan({ openings: [{ at: "13:00" }] }));
+  const llm = new ScriptedLlm().onPlan((plan) => plan.finishPlan({ openings: [{ at: "13:00" }] }));
   const app = await startApp(t, { llm });
   await app.advanceTo("11:00");
 

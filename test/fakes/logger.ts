@@ -8,8 +8,8 @@ export class MemoryLogger implements Logger {
     this.lines.push(`info ${message}`);
   }
 
-  warn(message: string): void {
-    this.lines.push(`warn ${message}`);
+  warn(message: string, cause?: unknown): void {
+    this.lines.push(cause === undefined ? `warn ${message}` : `warn ${message}: ${String(cause)}`);
   }
 
   error(message: string, cause?: unknown): void {

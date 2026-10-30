@@ -97,8 +97,20 @@ export class MessageRepository {
     return row.ts === null ? undefined : fromDbTime(row.ts);
   }
 
-  /** 흐름을 여는 커밋은 흐름 밖 메시지를 모두 그 흐름으로 옮긴다. 판정 대기였던 것은 받은 것이 된다. */
-  moveOutsideMessagesIntoFlow(flowId: number): void {
+  /**
+   * 흐름을 여는 커밋은 흐름 밖 메시지를 모두 그 흐름으로 옮긴다. 판정 대기였던 것은 받은 것이 된다.
+   * 최근 `keepLatest`개 밖의 것은 입력에서 빠지도록 `trimmed`로 표시한다.
+   */
+  moveOutsideMessagesIntoFlow(flowId: number, keepLatest: number): void {
+    this.#db
+      .prepare(
+        `UPDATE messages SET void_reason = 'trimmed'
+         WHERE flow_id IS NULL AND role = 'user' AND void_reason IS NULL
+           AND id NOT IN (
+             SELECT id FROM messages WHERE flow_id IS NULL AND role = 'user' AND void_reason IS NULL
+             ORDER BY id DESC LIMIT ?)`,
+      )
+      .run(keepLatest);
     this.#db
       .prepare(
         `UPDATE messages SET flow_id = ?, triage = CASE triage WHEN 'pending' THEN 'accepted' ELSE triage END
@@ -107,8 +119,10 @@ export class MessageRepository {
       .run(flowId);
   }
 
-  markPendingIgnored(): void {
-    this.#db.prepare(`UPDATE messages SET triage = 'ignored' WHERE ${PENDING_OUTSIDE_FLOW}`).run();
+  markPendingIgnoredUpTo(lastSeenId: number): void {
+    this.#db
+      .prepare(`UPDATE messages SET triage = 'ignored' WHERE ${PENDING_OUTSIDE_FLOW} AND id <= ?`)
+      .run(lastSeenId);
   }
 
   hasUserMessageSince(since: DateTime): boolean {

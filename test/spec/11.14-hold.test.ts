@@ -41,9 +41,9 @@ test("109: 일일 상한 보류는 로컬 자정에 풀리고 재개 뒤 밀린 
 });
 
 test("111: 보류 중에도 블랙아웃 시작에 흐름을 닫고, 정리·날 넘김·계획은 해제 뒤에 돈다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((c) => {
-    c.openFlow({ say: "응", continueAfter: { hours: 2 } });
-    c.createGoal({ title: "산책" });
+  const llm = new ScriptedLlm().onTurn((turn) => {
+    turn.createGoal({ title: "산책" });
+    return turn.say("응", { continueAfter: { hours: 2 } });
   });
   const app = await startApp(t, {
     at: "2026-10-30 22:00",

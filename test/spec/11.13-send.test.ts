@@ -5,7 +5,7 @@ import { ScriptedLlm } from "../fakes/llm-tasks.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
 function replyingWith(...say: string[]): ScriptedLlm {
-  return new ScriptedLlm().onTurn((c) => c.openFlow({ say, continueAfter: { hours: 1 } }));
+  return new ScriptedLlm().onTurn((turn) => turn.say(say, { continueAfter: { hours: 1 } }));
 }
 
 async function askAndWaitForTurn(app: TestApp): Promise<void> {
@@ -72,8 +72,8 @@ test("103: 403이면 남은 outbox를 모두 undelivered로 두고 blocked 보�
 });
 
 test("104: blocked 중 사용자 메시지가 오면 보류를 풀고 재개한다", async (t) => {
-  const llm = replyingWith("하나").onTurn((c) =>
-    c.reply({ say: "다시 왔네", continueAfter: { hours: 1 } }),
+  const llm = replyingWith("하나").onTurn((turn) =>
+    turn.say("다시 왔네", { continueAfter: { hours: 1 } }),
   );
   const app = await startApp(t, { llm });
   app.telegram.failNextSends(new TelegramError(403, "bot was blocked by the user"));

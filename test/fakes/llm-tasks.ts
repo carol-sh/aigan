@@ -1,232 +1,242 @@
 import { DateTime, type DurationLike } from "luxon";
 import { inTransaction } from "../../src/db/transaction.ts";
+import type { Deciders } from "../../src/worker/boot.ts";
+import type { CleanupRequest } from "../../src/worker/cleanup.ts";
 import type { HarnessContext } from "../../src/worker/context.ts";
-import { closeFlow, scheduleFollowUpsForUncoveredGoals } from "../../src/worker/flow.ts";
-import type { LlmTask, LlmTaskHandlers, TurnTask } from "../../src/worker/tasks.ts";
-import { cleanupBackoffDelaySec, turnBackoffDelaySec } from "../../src/time.ts";
+import { formatLocalTime } from "../../src/worker/reservation-times.ts";
+import type { LlmTask, PlanTask, TurnTask } from "../../src/worker/tasks.ts";
+import type { ToolResult } from "../../src/worker/tools/tool-box.ts";
+import type { WorkingGoal } from "../../src/worker/tools/turn-changes.ts";
+import type { TurnOutput, TurnRequest } from "../../src/worker/turn.ts";
+import { turnBackoffDelaySec } from "../../src/time.ts";
 
-export type Script = (commit: FakeCommit) => unknown;
+export type TurnScript = (turn: ScriptedTurn) => TurnOutput | Promise<TurnOutput>;
+export type CleanupScript = (cleanup: ScriptedCleanup) => unknown;
+export type PlanScript = (plan: FakePlan) => unknown;
 
 export interface LoggedTask {
   task: LlmTask;
   startedAt: DateTime;
+  isReconsider?: boolean;
 }
 
 const RUNAWAY_LIMIT = 300;
 
 /**
- * LLM 작업 자리에 들어가는 가짜. 테스트가 작업 종류별 각본을 주고, 각본은 `FakeCommit`으로
- * 턴·계획·정리가 커밋했을 결과만 DB에 남긴다. 각본이 없으면 아무 말 없이 끝난 것처럼 처리한다.
+ * LLM 자리에 들어가는 각본. 턴·정리 각본은 실제 도구를 부르고 출력을 낸다. 흐름 열기·닫기,
+ * 도구 효과 반영, 기억 커밋은 실제 코드가 한다. 계획만 아직 커밋 결과를 가짜가 직접 쓴다.
+ * 각본이 없으면 아무 말 없이 끝난 것처럼 처리한다.
  */
 export class ScriptedLlm {
   readonly log: LoggedTask[] = [];
-  readonly #scripts: { turn: Script[]; cleanup: Script[]; plan: Script[] } = {
-    turn: [],
-    cleanup: [],
-    plan: [],
-  };
+  readonly #turnScripts: TurnScript[] = [];
+  readonly #reconsiderScripts: TurnScript[] = [];
+  readonly #cleanupScripts: CleanupScript[] = [];
+  readonly #planScripts: PlanScript[] = [];
 
-  onTurn(...scripts: Script[]): this {
-    this.#scripts.turn.push(...scripts);
+  onTurn(...scripts: TurnScript[]): this {
+    this.#turnScripts.push(...scripts);
     return this;
   }
 
-  onCleanup(...scripts: Script[]): this {
-    this.#scripts.cleanup.push(...scripts);
+  /** 되묻기에 쓰는 각본. 없으면 첫 출력을 그대로 다시 낸다(또 빠뜨림). */
+  onReconsider(...scripts: TurnScript[]): this {
+    this.#reconsiderScripts.push(...scripts);
     return this;
   }
 
-  onPlan(...scripts: Script[]): this {
-    this.#scripts.plan.push(...scripts);
+  onCleanup(...scripts: CleanupScript[]): this {
+    this.#cleanupScripts.push(...scripts);
     return this;
   }
 
-  handlersFor(ctx: HarnessContext): LlmTaskHandlers {
-    const run = async (task: LlmTask, scripts: Script[], silentOutcome: Script) => {
-      this.log.push({ task, startedAt: ctx.clock.now() });
-      if (this.log.length > RUNAWAY_LIMIT) throw new Error("LLM 작업이 끝없이 반복된다");
-      const commit = new FakeCommit(ctx, task);
-      await (scripts.shift() ?? silentOutcome)(commit);
-    };
+  onPlan(...scripts: PlanScript[]): this {
+    this.#planScripts.push(...scripts);
+    return this;
+  }
+
+  decidersFor(ctx: HarnessContext): Deciders {
     return {
-      turn: (task) => run(task, this.#scripts.turn, silentTurn),
-      cleanup: (task) => run(task, this.#scripts.cleanup, (c) => c.finishCleanup()),
-      plan: (task) => run(task, this.#scripts.plan, (c) => c.finishPlan()),
+      turn: { begin: (request) => this.#beginTurn(ctx, request) },
+      cleanup: { decide: (request) => this.#runCleanup(ctx, request) },
+      plan: (task) => this.#runPlan(ctx, task),
     };
+  }
+
+  #beginTurn(ctx: HarnessContext, request: TurnRequest) {
+    this.#record(ctx, request.task);
+    let firstOutput: TurnOutput | undefined;
+    return {
+      decide: async () => {
+        const turn = new ScriptedTurn(ctx, request);
+        firstOutput = await (this.#turnScripts.shift() ?? silentTurn)(turn);
+        return firstOutput;
+      },
+      reconsider: async (goalsWithoutNextCheck: WorkingGoal[]) => {
+        const turn = new ScriptedTurn(ctx, request, goalsWithoutNextCheck);
+        this.#record(ctx, request.task, { isReconsider: true });
+        const script = this.#reconsiderScripts.shift() ?? (() => firstOutput!);
+        return script(turn);
+      },
+    };
+  }
+
+  async #runCleanup(ctx: HarnessContext, request: CleanupRequest): Promise<void> {
+    this.#record(ctx, { kind: "cleanup", flowId: request.flowId });
+    await this.#cleanupScripts.shift()?.(new ScriptedCleanup(request));
+  }
+
+  async #runPlan(ctx: HarnessContext, task: PlanTask): Promise<void> {
+    this.#record(ctx, task);
+    await (this.#planScripts.shift() ?? ((plan) => plan.finishPlan()))(new FakePlan(ctx));
+  }
+
+  /** 끝없는 반복은 결정 실패가 아니라 작업 예외로 던져, 루프가 다음 깨어남까지 멈추게 한다. */
+  #record(ctx: HarnessContext, task: LlmTask, options: { isReconsider?: boolean } = {}): void {
+    this.log.push({ task, startedAt: ctx.clock.now(), ...options });
+    if (this.log.length > RUNAWAY_LIMIT) throw new RunawayError("LLM 작업이 끝없이 반복된다");
   }
 }
 
-function silentTurn(commit: FakeCommit): void {
-  const task = commit.task as TurnTask;
-  if (task.trigger === "open") commit.cancelOpening();
-  else if (task.trigger === "user") commit.ignore();
-  else commit.waitQuietly();
+class RunawayError extends Error {}
+
+function silentTurn(turn: ScriptedTurn): TurnOutput {
+  return turn.task.trigger === "continue" ? turn.silentEnd() : turn.silent();
 }
 
-export interface Speech {
-  say?: string | string[];
+export interface SpeechOptions {
   continueAfter?: DurationLike;
 }
 
-export class FakeCommit {
-  readonly task: LlmTask;
+export class ScriptedTurn {
+  readonly task: TurnTask;
+  readonly goalsWithoutNextCheck: WorkingGoal[];
   readonly #ctx: HarnessContext;
-  /** 턴이 pre에서 입력으로 고정한 user 메시지의 끝. 그 뒤에 온 것은 이 턴이 답하지 않은 것으로 남는다. */
-  readonly #seenUpToId: number;
-  #flowId: number | undefined;
+  readonly #request: TurnRequest;
 
-  constructor(ctx: HarnessContext, task: LlmTask) {
+  constructor(
+    ctx: HarnessContext,
+    request: TurnRequest,
+    goalsWithoutNextCheck: WorkingGoal[] = [],
+  ) {
     this.#ctx = ctx;
-    this.task = task;
-    this.#seenUpToId = ctx.messages.latestUserMessageId();
-    this.#flowId = "flowId" in task ? task.flowId : undefined;
+    this.#request = request;
+    this.task = request.task;
+    this.goalsWithoutNextCheck = goalsWithoutNextCheck;
   }
 
-  at(localTime: string): DateTime {
-    return parseLocalTime(localTime, this.#ctx.config.timezone, this.#ctx.clock.now());
+  use(name: string, args: unknown): ToolResult {
+    return this.#request.tools.use(name, args);
   }
 
-  get #now(): DateTime {
-    return this.#ctx.clock.now();
+  /** 도구 인자 형식의 시각. `HH:mm`이면 지금의 로컬 날짜로 채운다. */
+  time(localTime: string): string {
+    return formatLocalTime(
+      parseLocalTime(localTime, this.#ctx.config.timezone, this.#ctx.clock.now()),
+      this.#ctx.config.timezone,
+    );
   }
 
-  get flowId(): number {
-    if (this.#flowId === undefined) throw new Error("이 작업에는 흐름이 없다");
-    return this.#flowId;
-  }
-
-  openFlow(speech: Speech = {}): number {
-    const task = this.#turnTask("open", "user");
-    return inTransaction(this.#ctx.db, () => {
-      const opening =
-        task.trigger === "open" ? this.#ctx.reservations.findById(task.reservationId) : undefined;
-      const flowId = this.#ctx.flows.open({
-        opener: task.trigger === "open" ? "ai" : "user",
-        openedByReservationId: opening?.id ?? null,
-        openedIntent: opening?.intent ?? null,
-        planDate: this.#ctx.calendar.currentPlanDate(this.#now),
-        startedAt: this.#now,
-      });
-      if (opening) {
-        for (const goalId of this.#ctx.reservations.goalIdsOf(opening.id))
-          this.#ctx.flows.addGoal(flowId, goalId);
-        this.#ctx.reservations.delete(opening.id);
-      }
-      this.#ctx.messages.moveOutsideMessagesIntoFlow(flowId);
-      this.#flowId = flowId;
-      this.#speakInFlow(speech);
-      return flowId;
-    });
-  }
-
-  reply(speech: Speech = {}): void {
-    inTransaction(this.#ctx.db, () => this.#speakInFlow(speech));
-  }
-
-  waitQuietly(): void {
-    this.reply({});
-  }
-
-  endFlow(speech: Pick<Speech, "say"> = {}): void {
-    inTransaction(this.#ctx.db, () => {
-      this.#ctx.flows.recordTurn(this.flowId, this.#seenUpToId);
-      this.#queue(speech.say);
-      closeFlow(this.#ctx, this.flowId, "agent");
-    });
-  }
-
-  ignore(): void {
-    this.#turnTask("user");
-    this.#ctx.messages.markPendingIgnored();
-  }
-
-  cancelOpening(): void {
-    const task = this.#turnTask("open");
-    inTransaction(this.#ctx.db, () => {
-      this.#ctx.reservations.delete(task.reservationId);
-      scheduleFollowUpsForUncoveredGoals(this.#ctx);
-    });
-  }
-
-  createGoal(goal: { title: string; dueAt?: string }): number {
-    const goalId = this.#ctx.goals.create({
-      jobId: "sample",
-      jobSnapshot: "",
+  createGoal(goal: { title: string; dueAt?: string; jobId?: string }): number {
+    const result = this.#useOrThrow("goal_create", {
+      job_id: goal.jobId ?? "sample",
       title: goal.title,
-      doneCriteria: "",
-      dueAt: goal.dueAt === undefined ? null : this.at(goal.dueAt),
-      planDate: this.#ctx.calendar.currentPlanDate(this.#now),
-      createdAt: this.#now,
+      done_criteria: `${goal.title} 끝`,
+      due_at: goal.dueAt && this.time(goal.dueAt),
     });
-    this.#ctx.flows.addGoal(this.flowId, goalId);
-    return goalId;
+    return result.goal_id as number;
   }
 
-  closeGoal(goalId: number): void {
-    this.#ctx.goals.close(goalId, "done", "끝냄", this.#now);
-  }
-
-  scheduleOpening(opening: { at: string; intent?: string; goalIds?: number[] }): number {
-    return this.#ctx.reservations.scheduleOpening({
-      at: this.at(opening.at),
+  reserveOpening(opening: { at: string; intent?: string; goalIds?: number[] }): number {
+    const result = this.#useOrThrow("open_reserve", {
+      at: this.time(opening.at),
       intent: opening.intent ?? "개입",
-      planDate: this.#ctx.calendar.currentPlanDate(this.#now),
-      source: this.task.kind === "plan" ? "plan" : "turn",
-      goalIds: opening.goalIds ?? [],
-      createdAt: this.#now,
+      goal_ids: opening.goalIds ?? [],
     });
+    return result.reservation_id as number;
   }
 
-  finishCleanup(): void {
-    this.#ctx.flows.finishCleanup(this.#cleanupFlowId(), "done");
+  say(say: string | string[], options: SpeechOptions = {}): TurnOutput {
+    const continueAt =
+      options.continueAfter === undefined
+        ? undefined
+        : this.#ctx.clock.now().plus(options.continueAfter);
+    return { messages: toMessages(say), next: { kind: "continue", at: continueAt } };
   }
 
-  failCleanup(): void {
-    const flow = this.#ctx.flows.findById(this.#cleanupFlowId())!;
-    const delaySec = cleanupBackoffDelaySec(flow.cleanup_attempts + 1, this.#ctx.config);
-    this.#ctx.flows.recordCleanupAttempt(flow.id, this.#now.plus({ seconds: delaySec }));
+  end(say: string | string[] = []): TurnOutput {
+    return { messages: toMessages(say), next: { kind: "end" } };
+  }
+
+  /** 말 없이 이어가기. 개시 턴이면 무시·개입 취소, 답장 턴이면 조용히 기다림이다. */
+  silent(): TurnOutput {
+    return { messages: [], next: { kind: "continue" } };
+  }
+
+  silentEnd(): TurnOutput {
+    return this.end();
+  }
+
+  #useOrThrow(name: string, args: unknown): Extract<ToolResult, { ok: true }> {
+    const result = this.use(name, args);
+    if (!result.ok) throw new Error(`각본의 ${name}가 거부됐다: ${result.reason}`);
+    return result;
+  }
+}
+
+function toMessages(say: string | string[]): string[] {
+  return typeof say === "string" ? [say] : say;
+}
+
+export class ScriptedCleanup {
+  readonly flowId: number;
+  readonly #request: CleanupRequest;
+
+  constructor(request: CleanupRequest) {
+    this.#request = request;
+    this.flowId = request.flowId;
+  }
+
+  use(name: string, args: unknown): ToolResult {
+    return this.#request.tools.use(name, args);
+  }
+
+  fail(): never {
+    throw new Error("각본이 정리를 실패시켰다");
+  }
+}
+
+/** 계획 결과를 DB에 직접 쓰는 가짜. 계획 단계에서 실제 계획 커밋으로 바꾼다. */
+export class FakePlan {
+  readonly #ctx: HarnessContext;
+
+  constructor(ctx: HarnessContext) {
+    this.#ctx = ctx;
   }
 
   finishPlan(plan: { openings?: { at: string; intent?: string }[] } = {}): void {
+    const now = this.#ctx.clock.now();
+    const planDate = this.#ctx.calendar.currentPlanDate(now);
     inTransaction(this.#ctx.db, () => {
-      for (const opening of plan.openings ?? []) this.scheduleOpening(opening);
-      this.#ctx.harnessState.markPlanned(this.#ctx.calendar.currentPlanDate(this.#now));
+      for (const opening of plan.openings ?? []) {
+        this.#ctx.reservations.scheduleOpening({
+          at: parseLocalTime(opening.at, this.#ctx.config.timezone, now),
+          intent: opening.intent ?? "개입",
+          planDate,
+          source: "plan",
+          goalIds: [],
+          createdAt: now,
+        });
+      }
+      this.#ctx.harnessState.markPlanned(planDate);
     });
   }
 
   failPlan(): void {
     const attempts = this.#ctx.harnessState.get().plan_attempts + 1;
     this.#ctx.harnessState.recordPlanAttempt(
-      this.#now.plus({ seconds: turnBackoffDelaySec(attempts, this.#ctx.config) }),
+      this.#ctx.clock.now().plus({ seconds: turnBackoffDelaySec(attempts, this.#ctx.config) }),
     );
-  }
-
-  #speakInFlow(speech: Speech): void {
-    this.#ctx.flows.recordTurn(this.flowId, this.#seenUpToId);
-    this.#queue(speech.say);
-    const continueAt = this.#now.plus(
-      speech.continueAfter ?? { seconds: this.#ctx.config.continue_default_sec },
-    );
-    this.#ctx.reservations.scheduleContinue(this.flowId, continueAt, "turn", this.#now);
-  }
-
-  #queue(say: string | string[] | undefined): void {
-    for (const text of typeof say === "string" ? [say] : (say ?? [])) {
-      this.#ctx.messages.queueAssistantMessage(this.flowId, text, this.#now);
-    }
-  }
-
-  #turnTask<T extends TurnTask["trigger"]>(...triggers: T[]): Extract<TurnTask, { trigger: T }> {
-    const task = this.task;
-    if (task.kind !== "turn" || !triggers.includes(task.trigger as T)) {
-      throw new Error(`${triggers.join("/")} 턴에서만 쓸 수 있다`);
-    }
-    return task as Extract<TurnTask, { trigger: T }>;
-  }
-
-  #cleanupFlowId(): number {
-    if (this.task.kind !== "cleanup") throw new Error("정리 작업에서만 쓸 수 있다");
-    return this.task.flowId;
   }
 }
 

@@ -57,7 +57,7 @@ test("75e: 턴 백오프 중에 계획일 경계를 지나도 날 넘김은 돌�
 });
 
 test("75f: 사흘 다운 뒤 낮에 재시작하면 날 넘김 → 판정 대기 메시지 → 계획 순이고 어제 개입은 돌지 않는다", async (t) => {
-  const llm = new ScriptedLlm().onTurn(createTwoGoalsCheckedAt("23:00"), (c) => c.ignore());
+  const llm = new ScriptedLlm().onTurn(createTwoGoalsCheckedAt("23:00"), (turn) => turn.silent());
   const app = await startApp(t, { at: "2026-10-30 21:00", llm });
   await app.user("오늘 뭐 하지");
   await app.advance({ seconds: 20 });

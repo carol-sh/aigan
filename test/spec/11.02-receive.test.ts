@@ -9,8 +9,8 @@ function userMessages(app: TestApp): Pick<Message, "content" | "flow_id" | "tria
 }
 
 test("7: 흐름이 열려 있으면 메시지는 그 흐름에 들어가고 판정이 없다", async (t) => {
-  const llm = new ScriptedLlm().onTurn((c) =>
-    c.openFlow({ say: "응", continueAfter: { minutes: 30 } }),
+  const llm = new ScriptedLlm().onTurn((turn) =>
+    turn.say("응", { continueAfter: { minutes: 30 } }),
   );
   const app = await startApp(t, { llm });
   await app.user("시작하자");

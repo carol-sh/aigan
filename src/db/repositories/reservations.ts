@@ -17,6 +17,8 @@ export interface Reservation {
 }
 
 export interface NewOpening {
+  /** 턴이 도구 결과로 미리 알려 준 id. 없으면 SQLite가 정한다. */
+  id?: number;
   at: DateTime;
   intent: string;
   planDate: PlanDate;
@@ -74,10 +76,11 @@ export class ReservationRepository {
   scheduleOpening(opening: NewOpening): number {
     const result = this.#db
       .prepare(
-        `INSERT INTO reservations (kind, at, intent, plan_date, source, created_at)
-         VALUES ('open', ?, ?, ?, ?, ?)`,
+        `INSERT INTO reservations (id, kind, at, intent, plan_date, source, created_at)
+         VALUES (?, 'open', ?, ?, ?, ?, ?)`,
       )
       .run(
+        opening.id ?? null,
         toDbTime(opening.at),
         opening.intent,
         opening.planDate,
@@ -85,11 +88,49 @@ export class ReservationRepository {
         toDbTime(opening.createdAt),
       );
     const reservationId = Number(result.lastInsertRowid);
+    this.#linkGoals(reservationId, opening.goalIds);
+    return reservationId;
+  }
+
+  /** `at`을 바꾸면 밀린 개입을 미루는 것이라 `scheduled`로 되돌린다. */
+  updateOpening(
+    reservationId: number,
+    changes: { at?: DateTime; intent?: string; goalIds?: number[] },
+  ): void {
+    if (changes.at !== undefined) {
+      this.#db
+        .prepare("UPDATE reservations SET at = ?, state = 'scheduled' WHERE id = ?")
+        .run(toDbTime(changes.at), reservationId);
+    }
+    if (changes.intent !== undefined) {
+      this.#db
+        .prepare("UPDATE reservations SET intent = ? WHERE id = ?")
+        .run(changes.intent, reservationId);
+    }
+    if (changes.goalIds !== undefined) {
+      this.#db.prepare("DELETE FROM reservation_goals WHERE reservation_id = ?").run(reservationId);
+      this.#linkGoals(reservationId, changes.goalIds);
+    }
+  }
+
+  findOpenings(): Reservation[] {
+    return this.#db
+      .prepare("SELECT * FROM reservations WHERE kind = 'open' ORDER BY at, id")
+      .all() as unknown as Reservation[];
+  }
+
+  maxId(): number {
+    const row = this.#db.prepare("SELECT MAX(id) AS id FROM reservations").get() as {
+      id: number | null;
+    };
+    return row.id ?? 0;
+  }
+
+  #linkGoals(reservationId: number, goalIds: number[]): void {
     const linkGoal = this.#db.prepare(
       "INSERT INTO reservation_goals (reservation_id, goal_id) VALUES (?, ?)",
     );
-    for (const goalId of opening.goalIds) linkGoal.run(reservationId, goalId);
-    return reservationId;
+    for (const goalId of goalIds) linkGoal.run(reservationId, goalId);
   }
 
   /** 이어가기 예약은 흐름당 하나라서, 있으면 새 시각으로 바꾸고 `scheduled`로 되돌린다. */

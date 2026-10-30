@@ -43,6 +43,6 @@ export class TelegramError extends Error {
 
 export interface Logger {
   info(message: string): void;
-  warn(message: string): void;
+  warn(message: string, cause?: unknown): void;
   error(message: string, cause?: unknown): void;
 }
