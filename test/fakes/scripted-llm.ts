@@ -29,7 +29,7 @@ export interface LoggedTask {
   isReconsider?: boolean;
 }
 
-/** 각본이 낸 최종 답. 형식이 틀린 답이면 파싱 재시도에 낼 답(`retry`)도 함께 든다. */
+/** 각본이 낸 최종 답. 파싱 재시도를 받으면 `retry`를 내고, 없으면 같은 답을 되풀이한다. */
 export interface FinalAnswer {
   content: string;
   retry?: FinalAnswer;
@@ -101,6 +101,10 @@ export class ScriptedLlm implements ChatClient {
     this.#record(ctx, { kind: "plan" });
     if (this.#isRunaway()) throw new Error("LLM 작업이 끝없이 반복된다");
     await (this.#planScripts.shift() ?? ((plan) => plan.finishPlan()))(new FakePlan(ctx));
+  }
+
+  requestsOf(kind: "turn" | "cleanup"): ChatCompletionCreateParamsNonStreaming[] {
+    return this.requests.filter((params) => kindOf(params) === kind);
   }
 
   /** 마지막으로 시작한 `kind` 대화의 입력 문서(user 메시지). */
@@ -193,8 +197,9 @@ class ScriptedConversation {
     } else if (!this.#hasStarted) {
       this.#hasStarted = true;
       this.#answerWith(() => this.#scripts.start(this));
-    } else if (this.#lastAnswer?.retry !== undefined) {
-      this.#answerWith(async () => this.#lastAnswer!.retry!);
+    } else if (isRetryRequest(lastMessage)) {
+      const lastAnswer = this.#lastAnswer!;
+      this.#answerWith(async () => lastAnswer.retry ?? lastAnswer);
     } else if (this.#scripts.reconsider !== undefined) {
       const feedback = lastMessage.content as string;
       this.#answerWith(() => this.#scripts.reconsider!(this, feedback));
@@ -318,7 +323,7 @@ export class ScriptedTurn {
 
   /** 형식이 틀린 답. 파싱 재시도에는 `onRetry`를 내고, 없으면 또 틀린다. */
   malformed(options: { onRetry?: FinalAnswer } = {}): FinalAnswer {
-    return { content: "응 알았어", retry: options.onRetry ?? { content: "응 알았어" } };
+    return { content: "응 알았어", retry: options.onRetry };
   }
 
   apiError(): never {
@@ -445,6 +450,11 @@ function readTurnTask(document: string): Extract<ScriptedTask, { kind: "turn" }>
     default:
       throw new Error(`입력에서 계기를 읽을 수 없다: ${trigger}`);
   }
+}
+
+/** 하네스가 읽지 못한 답을 고쳐 달라는 요청. 피드백 문구는 `LlmConversation`이 쓴다. */
+function isRetryRequest(message: ChatCompletionMessageParam): boolean {
+  return message.role === "user" && String(message.content).startsWith("출력이 형식에 맞지 않는다");
 }
 
 function readGoalsWithoutNextCheck(feedback: string): { id: number; title: string }[] {

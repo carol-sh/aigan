@@ -104,3 +104,22 @@ test("111b: 보류 중 블랙아웃에 온 메시지는 흐름 밖 판정 대기
   await app.advanceTo("07:01");
   assert.deepEqual(app.llmTasks, ["10-30 22:00 plan", "10-31 00:00 plan", "10-31 07:00 turn:user"]);
 });
+
+test("112: 자정을 넘겨 재시작하면 첫 LLM 요청 직전에 daily_calls를 오늘 날짜로 새로 센다", async (t) => {
+  const app = await startApp(t, { at: "2026-10-29 22:00" });
+  await app.user("밤 인사");
+  await app.advance({ seconds: 20 });
+  assert.deepEqual(app.row("SELECT daily_calls, daily_calls_date FROM harness_state"), {
+    daily_calls: 1,
+    daily_calls_date: "2026-10-29",
+  });
+
+  await app.restart({ downFor: { hours: 11 } });
+  await app.user("아침 인사");
+  await app.advance({ seconds: 20 });
+
+  assert.deepEqual(app.row("SELECT daily_calls, daily_calls_date FROM harness_state"), {
+    daily_calls: 1,
+    daily_calls_date: "2026-10-30",
+  });
+});

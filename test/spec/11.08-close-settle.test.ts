@@ -215,3 +215,29 @@ test("69: 정리 규칙 파일이 없으면 정리는 skipped고 정리 작업�
   assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "skipped");
   assert.ok(!app.llmTasks.some((task) => task.endsWith("cleanup")));
 });
+
+test("62c: 되묻기는 첫 대화를 그대로 잇고, 다음 확인이 없는 목표와 그날 남은 시간을 알린다", async (t) => {
+  const app = await startWithEndingTurn(t, createGoalAndEnd({ title: "물" }), {
+    reconsider: (turn) => turn.end("이따 봐"),
+  });
+
+  const [, toolResultRequest, reconsiderRequest] = app.llm.requestsOf("turn");
+  assert.deepEqual(
+    reconsiderRequest?.messages.slice(0, toolResultRequest!.messages.length),
+    toolResultRequest?.messages,
+  );
+  assert.deepEqual(
+    reconsiderRequest?.messages.slice(-2).map(({ role }) => role),
+    ["assistant", "user"],
+  );
+  assert.equal(
+    String(reconsiderRequest?.messages.at(-1)?.content),
+    [
+      "다음 목표에 다음 확인이 없다:",
+      "- #1 물",
+      "open_reserve로 시각을 잡거나, open_update로 기존 예약에 붙이거나, goal_close하라.",
+      "오늘의 끝까지 남은 시간: 13시간 59분",
+    ].join("\n"),
+  );
+  assert.equal(app.rows("SELECT id FROM llm_calls WHERE kind = 'turn'").length, 3);
+});

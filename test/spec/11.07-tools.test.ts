@@ -421,3 +421,54 @@ test("61b: 없는 기억 칸의 memory_read는 거부한다", async (t) => {
 
   assertRejected(results[0], /약점/);
 });
+
+test("도구 라운드가 max_tool_rounds에 닿으면 도구 목록은 둔 채 tool_choice none으로 최종 답을 받는다", async (t) => {
+  const results: ToolResult[] = [];
+  const app = await startWithUserTurn(
+    t,
+    async (turn) => {
+      for (const title of ["물", "책", "산책"]) {
+        results.push(await turn.use("goal_create", goalArgs(title)));
+      }
+    },
+    { config: { max_tool_rounds: "2" } },
+  );
+
+  const requests = app.llm.requestsOf("turn");
+  assert.deepEqual(
+    requests.map((request) => request.tool_choice ?? "auto"),
+    ["auto", "auto", "none"],
+  );
+  assert.deepEqual(
+    requests.map((request) => request.tools?.length),
+    [8, 8, 8],
+  );
+  assertRejected(results[2], /도구를 쓸 수 없는 호출/);
+  assert.deepEqual(app.rows("SELECT title FROM goals"), [{ title: "물" }, { title: "책" }]);
+  assert.equal(app.rows("SELECT id FROM llm_calls").length, 3);
+  assert.deepEqual(app.telegram.sent, ["응"]);
+});
+
+test("한 답에서 부른 도구 여러 개는 순서대로 실행되고 각자 결과를 받는다", async (t) => {
+  let results: ToolResult[] = [];
+  const app = await startWithUserTurn(t, async (turn) => {
+    results = await turn.useAll([
+      { name: "goal_create", args: goalArgs("물") },
+      { name: "goal_update", args: { goal_id: 1, progress: "한 잔" } },
+    ]);
+  });
+
+  assert.deepEqual(results, [{ ok: true, goal_id: 1 }, { ok: true }]);
+  assert.equal(app.llm.requestsOf("turn").length, 2);
+  assert.equal(app.row("SELECT progress FROM goals").progress, "한 잔");
+});
+
+test("도구 인자가 JSON이 아니면 거부 결과를 돌려주고 턴은 계속된다", async (t) => {
+  const results: ToolResult[] = [];
+  const app = await startWithUserTurn(t, async (turn) => {
+    results.push(await turn.use("goal_create", '{"job_id": "sample", "title": '));
+  });
+
+  assertRejected(results[0], /도구 인자가 JSON이 아니다/);
+  assert.deepEqual(app.telegram.sent, ["응"]);
+});
