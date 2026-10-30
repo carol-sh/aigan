@@ -13,6 +13,7 @@ import { MemoryLogger } from "./fakes/logger.ts";
 import { FakeTelegram } from "./fakes/telegram.ts";
 
 const TIMEZONE = "Asia/Seoul";
+const FIXTURE_PROMPTS_DIR = "test/fixtures/prompts";
 
 export interface StartOptions {
   /** 로컬 시각 `yyyy-MM-dd HH:mm`. 기본은 평범한 금요일 오전. */
@@ -24,18 +25,25 @@ export interface StartOptions {
   /** 기본은 압축 규칙이 없어 압축하지 않는다. true면 흐름이 길어질 때 압축이 돈다. */
   compactRules?: boolean;
   preparePrompts?: (promptsDir: string) => void;
+  /**
+   * 복사할 프롬프트 폴더. 기본은 하네스 동작만 보는 최소 프롬프트(`test/fixtures/prompts`)다.
+   * 폴더를 주면 그 내용을 그대로 쓰고 `cleanupRules`·`compactRules`는 보지 않는다.
+   */
+  promptsDir?: string;
 }
 
 /** 임시 DATA_DIR로 실제 부팅을 하고 루프를 돌린다. 바깥 경계(시계·텔레그램·LLM 클라이언트·잔액)만 가짜다. */
 export async function startApp(t: TestContext, options: StartOptions = {}): Promise<TestApp> {
   const dataDir = mkdtempSync(join(tmpdir(), "aigan-"));
   writeFileSync(join(dataDir, "config"), testConfigText({ timezone: TIMEZONE, ...options.config }));
-  cpSync("examples/prompts", join(dataDir, "prompts"), { recursive: true });
-  if (options.cleanupRules !== false) {
-    writeFileSync(join(dataDir, "prompts", "cleanup-rules.md"), "기억에 남길 것을 정리한다.");
-  }
-  if (options.compactRules === true) {
-    writeFileSync(join(dataDir, "prompts", "compact-rules.md"), "긴 대화를 요약한다.");
+  cpSync(options.promptsDir ?? FIXTURE_PROMPTS_DIR, join(dataDir, "prompts"), { recursive: true });
+  if (options.promptsDir === undefined) {
+    if (options.cleanupRules !== false) {
+      writeFileSync(join(dataDir, "prompts", "cleanup-rules.md"), "기억에 남길 것을 정리한다.");
+    }
+    if (options.compactRules === true) {
+      writeFileSync(join(dataDir, "prompts", "compact-rules.md"), "긴 대화를 요약한다.");
+    }
   }
   options.preparePrompts?.(join(dataDir, "prompts"));
 

@@ -11,12 +11,12 @@ export interface CliResult {
   stderr: string;
 }
 
-/** 설정과 예시 프롬프트를 넣은 임시 DATA_DIR. 테스트가 끝나면 지운다. */
+/** 설정과 테스트용 프롬프트를 넣은 임시 DATA_DIR. 테스트가 끝나면 지운다. */
 export function makeDataDir(t: TestContext, config: ConfigOverrides = {}): string {
   const dataDir = mkdtempSync(join(tmpdir(), "aigan-cli-"));
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
   writeFileSync(join(dataDir, "config"), testConfigText(config));
-  cpSync("examples/prompts", join(dataDir, "prompts"), { recursive: true });
+  cpSync("test/fixtures/prompts", join(dataDir, "prompts"), { recursive: true });
   return dataDir;
 }
 
