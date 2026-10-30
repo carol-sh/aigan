@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Gate } from "../fakes/gate.ts";
 import { ScriptedLlm } from "../fakes/llm-tasks.ts";
 import { startApp } from "../rig.ts";
 
@@ -107,4 +108,47 @@ test("74: 블랙아웃 진입 시 흐름이 열려 있으면 닫기 → 정리 �
 
   assert.deepEqual(app.llmTasks.slice(2), ["10-31 00:00 cleanup", "10-31 00:00 plan"]);
   assert.deepEqual(goalStatesSeenByPlan, [{ state: "expired" }]);
+});
+
+test("73: 블랙아웃 직전에 고른 개시 턴이 블랙아웃 중에 커밋하면 말 없는 개입 취소가 된다", async (t) => {
+  const gate = new Gate();
+  const llm = new ScriptedLlm()
+    .onPlan((plan) => plan.finishPlan({ openings: [{ at: "23:59" }] }))
+    .onTurn(async (turn) => {
+      turn.createGoal({ title: "스트레칭" });
+      await gate.wait();
+      return turn.say("자기 전에 스트레칭", { continueAfter: { minutes: 10 } });
+    });
+  const app = await startApp(t, { at: "2026-10-30 23:00", llm });
+  await app.advanceTo("23:59");
+  await app.advanceTo("2026-10-31 00:01");
+
+  gate.open();
+  await app.advance({ seconds: 1 });
+
+  assert.deepEqual(app.rows("SELECT id FROM flows"), []);
+  assert.deepEqual(app.rows("SELECT id FROM goals"), []);
+  assert.deepEqual(app.rows("SELECT id FROM reservations"), []);
+  assert.deepEqual(app.telegram.sent, []);
+});
+
+test("75: 블랙아웃 직전 판정 턴의 io가 블랙아웃 시작을 넘기면 커밋하고 보낸 뒤 블랙아웃으로 닫는다", async (t) => {
+  const gate = new Gate();
+  const llm = new ScriptedLlm().onTurn(async (turn) => {
+    await gate.wait();
+    return turn.say("늦었네, 내일 보자", { continueAfter: { hours: 1 } });
+  });
+  const app = await startApp(t, { at: "2026-10-30 23:59", llm });
+  await app.user("아직 안 자");
+  await app.advance({ seconds: 20 });
+  await app.advanceTo("2026-10-31 00:01");
+
+  gate.open();
+  await app.advance({ seconds: 1 });
+
+  assert.deepEqual(app.telegram.sent, ["늦었네, 내일 보자"]);
+  assert.deepEqual(app.row("SELECT plan_date, end_reason FROM flows"), {
+    plan_date: "2026-10-30",
+    end_reason: "blackout",
+  });
 });

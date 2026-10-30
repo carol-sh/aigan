@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Gate } from "../fakes/gate.ts";
 import { ScriptedLlm } from "../fakes/llm-tasks.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
@@ -24,6 +25,30 @@ test("13: 밀린 개시 예약과 디바운스가 지난 판정 대기가 함께
   await app.advanceTo("08:30");
 
   assert.deepEqual(app.llmTasks, ["10-30 07:00 plan", "10-30 08:00 turn:open#1"]);
+  assert.deepEqual(app.rows("SELECT flow_id, triage FROM messages WHERE role = 'user'"), [
+    { flow_id: 1, triage: "accepted" },
+  ]);
+});
+
+test("13: 개시 턴의 io 중에 온 메시지는 흡수돼도 본 적 없는 것이라 디바운스 뒤 답장 턴이 받는다", async (t) => {
+  const gate = new Gate();
+  const llm = new ScriptedLlm()
+    .onPlan((plan) => plan.finishPlan({ openings: [{ at: "10:30" }] }))
+    .onTurn(async (turn) => {
+      await gate.wait();
+      return turn.say("산책 가자", { continueAfter: { hours: 1 } });
+    });
+  const app = await startApp(t, { llm });
+  await app.advanceTo("10:30");
+  await app.user("지금 바빠");
+
+  gate.open();
+  await app.advance({ seconds: 20 });
+
+  assert.deepEqual(app.rows("SELECT flow_id, triage FROM messages WHERE role = 'user'"), [
+    { flow_id: 1, triage: "accepted" },
+  ]);
+  assert.deepEqual(app.llmTasks.slice(1), ["10-30 10:30 turn:open#1", "10-30 10:30 turn:reply"]);
 });
 
 test("14: 판정 대기가 디바운스 중이면 밀린 개시 예약도 만료까지 기다린다 (L3)", async (t) => {
