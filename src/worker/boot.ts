@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Update } from "grammy/types";
-import { loadConfig } from "../config.ts";
+import { type Config, loadConfig } from "../config.ts";
 import { acquireInstanceLock } from "../db/lock.ts";
 import { openDatabase } from "../db/open.ts";
 import { createRepositories } from "../db/repositories/index.ts";
@@ -18,13 +18,18 @@ import { runCleanup } from "./cleanup.ts";
 import { runPlan } from "./plan.ts";
 import { runTurn } from "./turn.ts";
 
+/** 설정에서 만드는 바깥 연결. 실제로는 어댑터, 테스트는 가짜다. */
+export interface Connections {
+  chat: ChatClient;
+  telegram: Telegram;
+  balance: BalanceSource;
+}
+
 export interface BootOptions {
   dataDir: string;
   clock: Clock;
-  telegram: Telegram;
   logger: Logger;
-  chat: ChatClient;
-  balance: BalanceSource;
+  connect(config: Config): Connections;
 }
 
 export interface Harness {
@@ -38,6 +43,7 @@ export interface Harness {
 export function boot(options: BootOptions): Harness {
   const config = loadConfig(join(options.dataDir, "config"));
   const prompts = loadPrompts(join(options.dataDir, "prompts"));
+  const connections = options.connect(config);
   const releaseLock = acquireInstanceLock(options.dataDir);
   let db;
   try {
@@ -54,10 +60,8 @@ export function boot(options: BootOptions): Harness {
     prompts,
     calendar: PlanCalendar.fromConfig(config),
     clock: options.clock,
-    chat: options.chat,
-    balance: options.balance,
-    telegram: options.telegram,
     logger: options.logger,
+    ...connections,
   };
   const turnDeciders = { turn: new LlmTurnDecider(ctx), compact: new LlmCompactDecider(ctx) };
   const cleanupDecider = new LlmCleanupDecider(ctx);

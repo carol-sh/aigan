@@ -70,10 +70,8 @@ export class TestApp {
     this.#harness = boot({
       dataDir: this.dataDir,
       clock: this.clock,
-      telegram: this.telegram,
       logger: this.logger,
-      chat: this.llm,
-      balance: this.balance,
+      connect: () => ({ chat: this.llm, telegram: this.telegram, balance: this.balance }),
     });
     this.llm.attach(this.#harness.ctx);
     this.#harness.start();

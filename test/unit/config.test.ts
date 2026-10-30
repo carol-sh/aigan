@@ -55,3 +55,14 @@ test("deepseek은 잔액 설정이 필요하다", () => {
 test("모르는 시간대는 거부한다", () => {
   assert.throws(() => testConfig({ timezone: "Mars/Olympus" }), ConfigError);
 });
+
+test("llm_base_url과 telegram_api_root는 비우면 공식 주소를 쓰고, URL이 아니면 거부한다", () => {
+  assert.equal(testConfig().llm_base_url, undefined);
+  assert.equal(
+    testConfig({ telegram_api_root: "http://127.0.0.1:8081" }).telegram_api_root,
+    "http://127.0.0.1:8081",
+  );
+  for (const key of ["llm_base_url", "telegram_api_root"]) {
+    assert.throws(() => testConfig({ [key]: "api.example" }), ConfigError, key);
+  }
+});
