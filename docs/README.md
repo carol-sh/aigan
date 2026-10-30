@@ -9,6 +9,12 @@
 | [`harness-design.md`](harness-design.md) | **정본(1.0).** 개체·불변식·이벤트·LLM 접점·실행 계층(§6)·DB 스키마(§8)·워커 의사코드(§9)·테스트 목록(§11) |
 | [`figures/`](figures) | 정본에 실린 그림: 하루 예시(`harness-day`), 실행 모델(`harness-exec-model`), ERD(`harness-erd`). `.drawio`가 원본, `.png`는 렌더 결과 |
 
+## 구현 참고
+
+| 파일 | 내용 |
+|---|---|
+| [`notes/openai-adapter.md`](notes/openai-adapter.md) | `llm/` 구현용. OpenAI API 확인 결과(스파이크 대체), 실행기 구조, 가짜 클라이언트, 정본에 반영할 것 |
+
 ## 프롬프트 작성용
 
 하네스 구현에는 필요 없다. 프롬프트 본문(정본 §10)을 쓸 때 기준 장면으로 쓴다.
