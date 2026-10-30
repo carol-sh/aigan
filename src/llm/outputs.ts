@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { parseLocalTime } from "../worker/reservation-times.ts";
+import type { PlanOutput } from "../worker/plan.ts";
 import type { TurnTask } from "../worker/tasks.ts";
 import type { TurnOutput } from "../worker/turn.ts";
 
@@ -45,6 +46,31 @@ export const parseCleanupOutput: OutputParser<void> = (text) => {
   const parsed = parseJsonObject(text, z.object({}));
   return parsed.ok ? { ok: true, value: undefined } : parsed;
 };
+
+const planOutputSchema = z.object({
+  body: z.string().trim().min(1, "계획 본문이 비었다"),
+  openings: z.array(
+    z.object({
+      at: z.string(),
+      intent: z.string().trim().min(1, "intent가 비었다"),
+      goal_ids: z.array(z.number().int()).optional(),
+    }),
+  ),
+});
+
+export function planOutputParser(timezone: string): OutputParser<PlanOutput> {
+  return (text) => {
+    const parsed = parseJsonObject(text, planOutputSchema);
+    if (!parsed.ok) return parsed;
+    const openings: PlanOutput["openings"] = [];
+    for (const opening of parsed.value.openings) {
+      const at = parseLocalTime(opening.at, timezone);
+      if (at === undefined) return failed(`at ${opening.at}는 YYYY-MM-DD HH:mm 형식이 아니다`);
+      openings.push({ at, intent: opening.intent, goalIds: opening.goal_ids ?? [] });
+    }
+    return { ok: true, value: { body: parsed.value.body, openings } };
+  };
+}
 
 function parseJsonObject<T>(text: string, schema: z.ZodType<T>): ParsedOutput<T> {
   let json: unknown;

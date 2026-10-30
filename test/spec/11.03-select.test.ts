@@ -84,13 +84,13 @@ test("15: 밀린 개시 예약 셋은 at, id 순으로 하나씩, 앞 흐름이 
 
   assert.deepEqual(app.llmTasks, [
     "10-30 07:00 plan",
-    "10-30 08:00 turn:open#2",
+    "10-30 08:00 turn:open#1",
     "10-30 09:00 turn:continue",
     "10-30 09:00 cleanup",
-    "10-30 09:00 turn:open#3",
+    "10-30 09:00 turn:open#2",
     "10-30 09:30 turn:continue",
     "10-30 09:30 cleanup",
-    "10-30 09:30 turn:open#1",
+    "10-30 09:30 turn:open#3",
   ]);
 });
 
@@ -208,7 +208,7 @@ test("19: 턴 백오프 중이면 디바운스가 지난 판정 대기가 있어
 test("20: 보류 중이면 디바운스가 지난 메시지가 있어도 다음 기한은 hold_until이다 (L1)", async (t) => {
   const app = await startApp(t, {
     // 블랙아웃 시작을 자정에서 떼어 놓아 hold_until(자정)과 구별한다.
-    config: { timer_max_sleep_sec: ONE_DAY_SEC, daily_call_limit: "1", blackout: "01:00-08:00" },
+    config: { timer_max_sleep_sec: ONE_DAY_SEC, daily_call_limit: "2", blackout: "01:00-08:00" },
   });
   await app.user("첫 말");
   await app.advance({ seconds: 20 });

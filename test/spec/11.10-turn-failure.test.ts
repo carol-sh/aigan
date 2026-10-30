@@ -10,9 +10,10 @@ function lastMessageOf(request: ChatCompletionCreateParamsNonStreaming): string 
   return String(request.messages.at(-1)?.content);
 }
 
+/** 부팅 때 도는 계획의 요청은 뺀다. */
 function llmCalls(app: TestApp) {
   return app.rows<{ kind: string; flow_id: number | null; success: number; error: string | null }>(
-    "SELECT kind, flow_id, success, error FROM llm_calls ORDER BY id",
+    "SELECT kind, flow_id, success, error FROM llm_calls WHERE kind != 'plan' ORDER BY id",
   );
 }
 
@@ -176,11 +177,13 @@ test("llm_calls는 요청마다 종류·흐름·토큰·요청과 응답을 남�
   await app.advance({ seconds: 20 });
 
   assert.deepEqual(
-    llmCalls(app).map(({ kind, flow_id }) => `${kind}:${flow_id}`),
-    ["turn:null", "turn:null", "turn:1", "turn:1", "cleanup:1", "cleanup:1"],
+    app
+      .rows("SELECT kind, flow_id FROM llm_calls ORDER BY id")
+      .map(({ kind, flow_id }) => `${kind}:${flow_id}`),
+    ["plan:null", "turn:null", "turn:null", "turn:1", "turn:1", "cleanup:1", "cleanup:1"],
   );
   const call = app.row<Record<string, unknown>>(
-    "SELECT input_tokens, cached_tokens, output_tokens, request, response FROM llm_calls WHERE id = 1",
+    "SELECT input_tokens, cached_tokens, output_tokens, request, response FROM llm_calls WHERE id = 2",
   );
   assert.deepEqual(
     { input: call.input_tokens, cached: call.cached_tokens, output: call.output_tokens },

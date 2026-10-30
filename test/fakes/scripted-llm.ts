@@ -5,17 +5,15 @@ import type {
   ChatCompletionMessage,
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
-import { inTransaction } from "../../src/db/transaction.ts";
 import type { ChatClient } from "../../src/ports.ts";
-import { turnBackoffDelaySec } from "../../src/time.ts";
 import type { HarnessContext } from "../../src/worker/context.ts";
 import { formatLocalTime } from "../../src/worker/reservation-times.ts";
-import type { PlanTask, TurnTask } from "../../src/worker/tasks.ts";
+import type { TurnTask } from "../../src/worker/tasks.ts";
 import type { ToolResult } from "../../src/worker/tools/tool-box.ts";
 
 export type TurnScript = (turn: ScriptedTurn) => FinalAnswer | Promise<FinalAnswer>;
 export type CleanupScript = (cleanup: ScriptedCleanup) => unknown;
-export type PlanScript = (plan: FakePlan) => unknown;
+export type PlanScript = (plan: ScriptedPlan) => FinalAnswer | Promise<FinalAnswer>;
 
 /** 각본 모델이 대화를 시작할 때마다 남기는 기록. 모델이 입력에서 읽은 것만 담는다. */
 export type ScriptedTask =
@@ -47,7 +45,6 @@ const RUNAWAY_LIMIT = 300;
  * LLM 자리에 들어가는 각본 모델. 하네스의 실제 실행기가 보내는 요청을 받아 각본대로 completion을 낸다.
  * 각본이 도구를 부르면 tool_calls 답을 내고, 하네스가 실행한 결과가 다음 요청으로 오면 각본을 잇는다.
  * 무슨 작업인지는 실제 모델처럼 요청에서 읽는다(도구 목록과 이벤트 절의 `계기:` 줄).
- * 계획만 아직 실행기를 거치지 않아 결과를 가짜가 직접 쓴다.
  */
 export class ScriptedLlm implements ChatClient {
   readonly log: LoggedTask[] = [];
@@ -97,22 +94,16 @@ export class ScriptedLlm implements ChatClient {
     return this.#conversation!.reply(params);
   }
 
-  async runPlan(ctx: HarnessContext, _task: PlanTask): Promise<void> {
-    this.#record(ctx, { kind: "plan" });
-    if (this.#isRunaway()) throw new Error("LLM 작업이 끝없이 반복된다");
-    await (this.#planScripts.shift() ?? ((plan) => plan.finishPlan()))(new FakePlan(ctx));
-  }
-
-  requestsOf(kind: "turn" | "cleanup"): ChatCompletionCreateParamsNonStreaming[] {
+  requestsOf(kind: LlmKind): ChatCompletionCreateParamsNonStreaming[] {
     return this.requests.filter((params) => kindOf(params) === kind);
   }
 
   /** `kind` 대화마다 처음 받은 입력 문서(user 메시지). 시작한 순서다. */
-  inputs(kind: "turn" | "cleanup"): string[] {
+  inputs(kind: LlmKind): string[] {
     return this.requestsOf(kind).filter(isConversationStart).map(documentOf);
   }
 
-  lastInput(kind: "turn" | "cleanup"): string {
+  lastInput(kind: LlmKind): string {
     const input = this.inputs(kind).at(-1);
     if (input === undefined) throw new Error(`${kind} 요청이 없다`);
     return input;
@@ -121,6 +112,13 @@ export class ScriptedLlm implements ChatClient {
   #startConversation(params: ChatCompletionCreateParamsNonStreaming): ScriptedConversation {
     const ctx = this.#ctx!;
     const reportProblem = (problem: string) => this.problems.push(problem);
+    if (kindOf(params) === "plan") {
+      this.#record(ctx, { kind: "plan" });
+      const script = this.#planScripts.shift() ?? ((plan: ScriptedPlan) => plan.finishPlan());
+      return new ScriptedConversation(reportProblem, {
+        start: (conversation) => Promise.resolve(script(new ScriptedPlan(ctx, conversation))),
+      });
+    }
     if (kindOf(params) === "cleanup") {
       this.#record(ctx, { kind: "cleanup" });
       const script = this.#cleanupScripts.shift() ?? (() => {});
@@ -370,38 +368,47 @@ export class ScriptedCleanup {
   }
 }
 
-/** 계획 결과를 DB에 직접 쓰는 가짜. 계획 단계에서 실제 계획 커밋으로 바꾼다. */
-export class FakePlan {
-  readonly #ctx: HarnessContext;
+export interface ScriptedOpening {
+  /** `HH:mm`이면 지금의 로컬 날짜로 채운다. */
+  at: string;
+  intent?: string;
+  goalIds?: number[];
+}
 
-  constructor(ctx: HarnessContext) {
+export class ScriptedPlan {
+  readonly #ctx: HarnessContext;
+  readonly #conversation: ScriptedConversation;
+
+  constructor(ctx: HarnessContext, conversation: ScriptedConversation) {
     this.#ctx = ctx;
+    this.#conversation = conversation;
   }
 
-  finishPlan(plan: { body?: string; openings?: { at: string; intent?: string }[] } = {}): void {
+  async use(name: string, args: unknown): Promise<ToolResult> {
+    const [result] = await this.#conversation.useTools([{ name, args }]);
+    return result!;
+  }
+
+  finishPlan(plan: { body?: string; openings?: ScriptedOpening[] } = {}): FinalAnswer {
+    const { timezone } = this.#ctx.config;
     const now = this.#ctx.clock.now();
-    const planDate = this.#ctx.calendar.currentPlanDate(now);
-    inTransaction(this.#ctx.db, () => {
-      this.#ctx.plans.save(planDate, plan.body ?? "각본 계획", now);
-      for (const opening of plan.openings ?? []) {
-        this.#ctx.reservations.scheduleOpening({
-          at: parseLocalTime(opening.at, this.#ctx.config.timezone, now),
-          intent: opening.intent ?? "개입",
-          planDate,
-          source: "plan",
-          goalIds: [],
-          createdAt: now,
-        });
-      }
-      this.#ctx.harnessState.markPlanned(planDate);
+    return answer({
+      body: plan.body ?? "각본 계획",
+      openings: (plan.openings ?? []).map((opening) => ({
+        at: formatLocalTime(parseLocalTime(opening.at, timezone, now), timezone),
+        intent: opening.intent ?? "개입",
+        goal_ids: opening.goalIds ?? [],
+      })),
     });
   }
 
-  failPlan(): void {
-    const attempts = this.#ctx.harnessState.get().plan_attempts + 1;
-    this.#ctx.harnessState.recordPlanAttempt(
-      this.#ctx.clock.now().plus({ seconds: turnBackoffDelaySec(attempts, this.#ctx.config) }),
-    );
+  failPlan(): never {
+    throw new ScriptedApiError("각본이 계획을 실패시켰다");
+  }
+
+  /** 형식이 틀린 답. 파싱 재시도에는 `onRetry`를 내고, 없으면 또 틀린다. */
+  malformed(options: { onRetry?: FinalAnswer } = {}): FinalAnswer {
+    return { content: "오늘은 산책", retry: options.onRetry };
   }
 }
 
@@ -424,12 +431,16 @@ export function inputSection(document: string, title: string): string[] {
   return lines.slice(start + 1, end === -1 ? undefined : end).filter((line) => line !== "");
 }
 
-function kindOf(params: ChatCompletionCreateParamsNonStreaming): "turn" | "cleanup" {
+type LlmKind = "turn" | "cleanup" | "plan";
+
+/** 턴만 `goal_create`를, 정리만 `state_write`를 받는다. 계획은 `memory_read` 하나뿐이다. */
+function kindOf(params: ChatCompletionCreateParamsNonStreaming): LlmKind {
   const toolNames = (params.tools ?? []).map((tool) =>
     tool.type === "function" ? tool.function.name : "",
   );
   if (toolNames.includes("goal_create")) return "turn";
   if (toolNames.includes("state_write")) return "cleanup";
+  if (toolNames.length === 1 && toolNames[0] === "memory_read") return "plan";
   throw new Error(`도구 목록으로 작업을 알 수 없다: ${toolNames.join(", ")}`);
 }
 

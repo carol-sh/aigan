@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { DateTime } from "luxon";
-import { PlanCalendar, turnBackoffDelaySec } from "../../src/time.ts";
+import { PlanCalendar, failureBackoffDelaySec } from "../../src/time.ts";
 import { testConfig } from "../fakes/config.ts";
 
 function calendarWithBlackout(blackout: string, timezone = "Asia/Seoul"): PlanCalendar {
@@ -83,7 +83,7 @@ describe("DST가 있는 시간대", () => {
 test("턴 백오프는 처음 값에서 두 배씩 늘고 상한에서 멈춘다", () => {
   const config = testConfig();
   assert.deepEqual(
-    [1, 2, 3, 4, 5].map((failures) => turnBackoffDelaySec(failures, config)),
+    [1, 2, 3, 4, 5].map((failures) => failureBackoffDelaySec(failures, config)),
     [600, 1200, 2400, 4800, 7200],
   );
 });

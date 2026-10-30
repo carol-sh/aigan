@@ -5,16 +5,16 @@ import { acquireInstanceLock } from "../db/lock.ts";
 import { openDatabase } from "../db/open.ts";
 import { createRepositories } from "../db/repositories/index.ts";
 import { LlmCleanupDecider } from "../llm/cleanup-decider.ts";
+import { LlmPlanDecider } from "../llm/plan-decider.ts";
 import { LlmTurnDecider } from "../llm/turn-decider.ts";
 import type { BalanceSource, ChatClient, Clock, Logger, Telegram } from "../ports.ts";
 import { recordIncomingMessage } from "../producers/poller.ts";
 import { loadPrompts } from "../prompts.ts";
 import { PlanCalendar } from "../time.ts";
 import type { HarnessContext } from "./context.ts";
-import { holdIfOutOfBudget } from "./budget-gate.ts";
 import { TaskLoop } from "./loop.ts";
 import { runCleanup } from "./cleanup.ts";
-import type { PlanTask } from "./tasks.ts";
+import { runPlan } from "./plan.ts";
 import { runTurn } from "./turn.ts";
 
 export interface BootOptions {
@@ -24,8 +24,6 @@ export interface BootOptions {
   logger: Logger;
   chat: ChatClient;
   balance: BalanceSource;
-  /** 계획은 아직 LLM 실행기로 옮기지 않아 작업 통째로 받는다. */
-  runPlan(ctx: HarnessContext, task: PlanTask): Promise<void>;
 }
 
 export interface Harness {
@@ -62,14 +60,11 @@ export function boot(options: BootOptions): Harness {
   };
   const turnDecider = new LlmTurnDecider(ctx);
   const cleanupDecider = new LlmCleanupDecider(ctx);
+  const planDecider = new LlmPlanDecider(ctx);
   const loop = new TaskLoop(ctx, {
     turn: (task) => runTurn(ctx, turnDecider, task),
     cleanup: (task) => runCleanup(ctx, cleanupDecider, task),
-    // 계획 단계에서 게이트를 runPlan 안으로 옮긴다.
-    plan: async (task) => {
-      if (await holdIfOutOfBudget(ctx)) return;
-      await options.runPlan(ctx, task);
-    },
+    plan: (task) => runPlan(ctx, planDecider, task),
   });
 
   return {

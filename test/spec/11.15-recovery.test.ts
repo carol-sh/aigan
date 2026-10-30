@@ -126,12 +126,13 @@ test("119: 며칠 다운 뒤에는 지난 개시 예약을 지우고 지난 목�
   assert.equal(app.row("SELECT state FROM goals").state, "expired");
 });
 
-test("120: 계획 io 중에 죽으면 재시작 뒤 다시 계획을 돈다", async (t) => {
+test("120: 계획 io 중에 죽으면 재시작 뒤 io 전에 기록한 plan_retry_at에 다시 계획을 돈다", async (t) => {
   const llm = new ScriptedLlm().onPlan(neverFinishes);
   const app = await startApp(t, { llm });
 
   await app.restart({ downFor: { minutes: 1 } });
+  await app.advanceTo("10:10");
 
-  assert.deepEqual(app.llmTasks, ["10-30 10:00 plan", "10-30 10:01 plan"]);
+  assert.deepEqual(app.llmTasks, ["10-30 10:00 plan", "10-30 10:10 plan"]);
   assert.equal(app.row("SELECT last_plan_date FROM harness_state").last_plan_date, "2026-10-30");
 });

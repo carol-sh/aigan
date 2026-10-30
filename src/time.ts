@@ -92,7 +92,7 @@ export class PlanCalendar {
   }
 }
 
-export function turnBackoffDelaySec(failureCount: number, config: Config): number {
+export function failureBackoffDelaySec(failureCount: number, config: Config): number {
   return exponentialBackoff(
     failureCount,
     config.failure_backoff_first_sec,

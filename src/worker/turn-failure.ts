@@ -1,7 +1,7 @@
 import { inTransaction } from "../db/transaction.ts";
 import { LlmCallError } from "../llm/conversation.ts";
 import { describeTrigger } from "../llm/input/turn-input.ts";
-import { turnBackoffDelaySec } from "../time.ts";
+import { failureBackoffDelaySec } from "../time.ts";
 import type { HarnessContext } from "./context.ts";
 import { closeFlow, scheduleFollowUpsForUncoveredGoals } from "./flow.ts";
 import { alertOperator } from "./operator-alert.ts";
@@ -18,7 +18,7 @@ export async function recordTurnAttempt(ctx: HarnessContext): Promise<void> {
   const { failuresSoFar, retryAt } = inTransaction(ctx.db, () => {
     const failuresSoFar = ctx.harnessState.get().failure_count;
     const retryAt = now.plus({
-      seconds: turnBackoffDelaySec(failuresSoFar + 1, ctx.config),
+      seconds: failureBackoffDelaySec(failuresSoFar + 1, ctx.config),
     });
     ctx.harnessState.recordTurnAttempt(retryAt);
     return { failuresSoFar, retryAt };

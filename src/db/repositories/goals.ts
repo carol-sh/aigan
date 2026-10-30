@@ -75,6 +75,14 @@ export class GoalRepository {
       .all(planDate) as unknown as Goal[];
   }
 
+  findClosedSince(since: DateTime): Goal[] {
+    return this.#db
+      .prepare(
+        "SELECT * FROM goals WHERE state != 'active' AND closed_at >= ? ORDER BY closed_at, id",
+      )
+      .all(toDbTime(since)) as unknown as Goal[];
+  }
+
   /** 정리가 볼 목표: 흐름의 계획일 목표 전체와 그 흐름이 다룬 목표. */
   findForCleanup(flowId: number, planDate: PlanDate): (Goal & { is_in_flow: number })[] {
     return this.#db

@@ -1,6 +1,8 @@
 import type { DateTime } from "luxon";
 import type { Message } from "../../db/repositories/messages.ts";
+import type { Reservation } from "../../db/repositories/reservations.ts";
 import { fromDbTime } from "../../time.ts";
+import { formatLocalTime } from "../../worker/reservation-times.ts";
 
 export const NONE = "(없음)";
 
@@ -48,4 +50,22 @@ export function formatDuration(totalMinutes: number): string {
   const minutes = totalMinutes % 60;
   if (hours === 0) return `${minutes}분`;
   return minutes === 0 ? `${hours}시간` : `${hours}시간 ${minutes}분`;
+}
+
+export interface OpeningView {
+  reservation: Reservation;
+  goalIds: number[];
+}
+
+export function renderOpening({ reservation, goalIds }: OpeningView, timezone: string): string {
+  return [
+    `- #${reservation.id}`,
+    formatLocalTime(fromDbTime(reservation.at), timezone),
+    reservation.intent,
+    goalIds.length > 0 && `[목표 ${goalIds.join(", ")}]`,
+    `(${reservation.source})`,
+    reservation.state === "fired" && "밀림",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }

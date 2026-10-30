@@ -2,7 +2,6 @@ import type { DateTime } from "luxon";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { Goal } from "../../db/repositories/goals.ts";
 import type { Message } from "../../db/repositories/messages.ts";
-import type { Reservation } from "../../db/repositories/reservations.ts";
 import type { JobPolicy, Prompts } from "../../prompts.ts";
 import { type PlanDate, fromDbTime } from "../../time.ts";
 import type { HarnessContext } from "../../worker/context.ts";
@@ -10,11 +9,13 @@ import { formatLocalTime } from "../../worker/reservation-times.ts";
 import type { TurnTask } from "../../worker/tasks.ts";
 import {
   NONE,
+  type OpeningView,
   type TimeView,
   formatDuration,
   formatShortTime,
   renderMemory,
   renderMessages,
+  renderOpening,
   renderSection,
 } from "./transcript.ts";
 
@@ -30,7 +31,7 @@ export interface TurnInput {
   flowMessages: Message[];
   activeGoals: { goal: Goal; openingIds: number[] }[];
   closedGoals: Goal[];
-  openings: { reservation: Reservation; goalIds: number[] }[];
+  openings: OpeningView[];
   outside: { omittedCount: number; messages: Message[] };
   openedIntent: string | undefined;
   scheduledAt: DateTime | undefined;
@@ -190,22 +191,6 @@ function renderActiveGoal(
 
 function renderClosedGoal(goal: Goal): string {
   return `- #${goal.id} ${goal.title} [${goal.state}] ${goal.end_reason ?? ""}`.trimEnd();
-}
-
-function renderOpening(
-  { reservation, goalIds }: TurnInput["openings"][number],
-  timezone: string,
-): string {
-  return [
-    `- #${reservation.id}`,
-    formatLocalTime(fromDbTime(reservation.at), timezone),
-    reservation.intent,
-    goalIds.length > 0 && `[목표 ${goalIds.join(", ")}]`,
-    `(${reservation.source})`,
-    reservation.state === "fired" && "밀림",
-  ]
-    .filter(Boolean)
-    .join(" ");
 }
 
 function renderOutsideMessages(outside: TurnInput["outside"], view: TimeView): string[] {

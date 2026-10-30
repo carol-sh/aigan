@@ -445,7 +445,7 @@ test("도구 라운드가 max_tool_rounds에 닿으면 도구 목록은 둔 채 
   );
   assertRejected(results[2], /도구를 쓸 수 없는 호출/);
   assert.deepEqual(app.rows("SELECT title FROM goals"), [{ title: "물" }, { title: "책" }]);
-  assert.equal(app.rows("SELECT id FROM llm_calls").length, 3);
+  assert.equal(app.rows("SELECT id FROM llm_calls WHERE kind = 'turn'").length, 3);
   assert.deepEqual(app.telegram.sent, ["응"]);
 });
 

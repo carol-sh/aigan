@@ -24,7 +24,7 @@ export interface StartOptions {
   preparePrompts?: (promptsDir: string) => void;
 }
 
-/** 임시 DATA_DIR로 실제 부팅을 하고 루프를 돌린다. 바깥 경계(시계·텔레그램·LLM 클라이언트·잔액·계획)만 가짜다. */
+/** 임시 DATA_DIR로 실제 부팅을 하고 루프를 돌린다. 바깥 경계(시계·텔레그램·LLM 클라이언트·잔액)만 가짜다. */
 export async function startApp(t: TestContext, options: StartOptions = {}): Promise<TestApp> {
   const dataDir = mkdtempSync(join(tmpdir(), "aigan-"));
   writeFileSync(join(dataDir, "config"), testConfigText({ timezone: TIMEZONE, ...options.config }));
@@ -69,7 +69,6 @@ export class TestApp {
       logger: this.logger,
       chat: this.llm,
       balance: this.balance,
-      runPlan: (ctx, task) => this.llm.runPlan(ctx, task),
     });
     this.llm.attach(this.#harness.ctx);
     this.#harness.start();

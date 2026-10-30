@@ -4,10 +4,11 @@ import { ScriptedLlm } from "../fakes/scripted-llm.ts";
 import { createTwoGoalsCheckedAt } from "../fakes/scenarios.ts";
 import { type TestApp, startApp } from "../rig.ts";
 
-const ONLY_ONE_CALL_A_DAY = { daily_call_limit: "1" };
+/** 부팅 때 도는 계획(요청 1건)과 판정 턴 하나의 몫이다. */
+const ONE_TURN_A_DAY = { daily_call_limit: "2" };
 
-/** 판정 턴 하나(말 없이 무시, 요청 1건)로 `daily_call_limit`=1을 다 쓴다. */
-async function spendTheOnlyDailyCall(app: TestApp): Promise<void> {
+/** 판정 턴 하나(말 없이 무시, 요청 1건)로 `ONE_TURN_A_DAY`의 남은 몫을 다 쓴다. */
+async function spendTheOnlyTurnCall(app: TestApp): Promise<void> {
   await app.user("첫 말");
   await app.advance({ seconds: 20 });
 }
@@ -20,8 +21,8 @@ test("107: 일일 상한에 닿은 뒤의 개시 턴은 게이트가 보류에 �
   const llm = new ScriptedLlm().onPlan((plan) =>
     plan.finishPlan({ openings: [{ at: "12:00", intent: "점심 확인" }] }),
   );
-  const app = await startApp(t, { llm, config: ONLY_ONE_CALL_A_DAY });
-  await spendTheOnlyDailyCall(app);
+  const app = await startApp(t, { llm, config: ONE_TURN_A_DAY });
+  await spendTheOnlyTurnCall(app);
 
   await app.advanceTo("12:01");
 
@@ -37,7 +38,7 @@ test("107: 일일 상한에 닿은 뒤의 개시 턴은 게이트가 보류에 �
     turn_retry_at: null,
   });
   assert.deepEqual(app.telegram.alerts, [
-    "오늘 LLM 요청이 상한(1건)에 닿아 보류에 들어간다. 2026-10-31 00:00에 풀린다.",
+    "오늘 LLM 요청이 상한(2건)에 닿아 보류에 들어간다. 2026-10-31 00:00에 풀린다.",
   ]);
 });
 
@@ -51,7 +52,7 @@ test("107a: 상한은 작업 단위라, 시작할 때 남아 있으면 도구 �
       await turn.reserveOpening({ at: "15:00", intent: "물 확인", goalIds: [1] });
       return turn.end("물 마셔. 3시에 볼게");
     });
-  const app = await startApp(t, { llm, config: ONLY_ONE_CALL_A_DAY });
+  const app = await startApp(t, { llm, config: ONE_TURN_A_DAY });
 
   await app.user("뭐 할까");
   await app.advance({ seconds: 20 });
@@ -68,8 +69,8 @@ test("107a: 상한은 작업 단위라, 시작할 때 남아 있으면 도구 �
 });
 
 test("108: 보류 중에 온 메시지는 기록만 한다", async (t) => {
-  const app = await startApp(t, { config: ONLY_ONE_CALL_A_DAY });
-  await spendTheOnlyDailyCall(app);
+  const app = await startApp(t, { config: ONE_TURN_A_DAY });
+  await spendTheOnlyTurnCall(app);
   await app.user("안녕");
   await app.advance({ seconds: 20 });
 
@@ -86,8 +87,8 @@ test("108: 보류 중에 온 메시지는 기록만 한다", async (t) => {
 });
 
 test("109: 일일 상한 보류는 로컬 자정에 풀리고 재개 뒤 밀린 것을 처리한다", async (t) => {
-  const app = await startApp(t, { config: ONLY_ONE_CALL_A_DAY });
-  await spendTheOnlyDailyCall(app);
+  const app = await startApp(t, { config: ONE_TURN_A_DAY });
+  await spendTheOnlyTurnCall(app);
   await app.user("안녕");
   await app.advance({ seconds: 20 });
 
@@ -104,7 +105,7 @@ test("109: 일일 상한 보류는 로컬 자정에 풀리고 재개 뒤 밀린 
 });
 
 test("109a: 일일 상한 보류 중 내려가 자정을 넘겨 재시작하면 부팅 뒤 바로 풀고 밀린 것을 처리한다", async (t) => {
-  const app = await startApp(t, { config: { daily_call_limit: "2" } });
+  const app = await startApp(t, { config: { daily_call_limit: "3" } });
   for (const text of ["하나", "둘", "셋"]) {
     await app.user(text);
     await app.advance({ seconds: 20 });
@@ -119,7 +120,7 @@ test("109a: 일일 상한 보류 중 내려가 자정을 넘겨 재시작하면 
 
 test("87: 정리를 기다리는 중 보류에 들어가면 정리는 시도로 세지 않고 멈췄다가, 풀린 뒤 이어진다", async (t) => {
   const llm = new ScriptedLlm().onTurn((turn) => turn.end("잘 자"));
-  const app = await startApp(t, { at: "2026-10-30 22:00", llm, config: ONLY_ONE_CALL_A_DAY });
+  const app = await startApp(t, { at: "2026-10-30 22:00", llm, config: ONE_TURN_A_DAY });
 
   await app.user("잘게");
   await app.advance({ minutes: 30 });
@@ -132,7 +133,7 @@ test("87: 정리를 기다리는 중 보류에 들어가면 정리는 시도로 
 
   await app.advanceTo("2026-10-31 00:01");
   assert.equal(app.row("SELECT cleanup_status FROM flows").cleanup_status, "done");
-  assert.deepEqual(app.llmTasks.slice(2), ["10-31 00:00 cleanup"]);
+  assert.deepEqual(app.llmTasks.slice(2), ["10-31 00:00 cleanup", "10-31 00:00 plan"]);
 });
 
 const DEEPSEEK = {
@@ -224,7 +225,7 @@ test("111: 보류 중에도 블랙아웃 시작에 흐름을 닫고, 정리·날
   const app = await startApp(t, {
     at: "2026-10-30 22:00",
     llm,
-    config: { blackout: "23:00-07:00", daily_call_limit: "2" },
+    config: { blackout: "23:00-07:00", daily_call_limit: "3" },
   });
   await app.user("시작");
   await app.advance({ seconds: 20 });
@@ -248,8 +249,8 @@ test("111a: 흐름도 정리 대기도 없으면 날 넘김은 보류 중에 돌
   const app = await startApp(t, {
     at: "2026-10-30 21:00",
     llm,
-    // 판정 턴(목표 둘·예약·답 4건)과 정리(1건)까지 쓰고, 22:50 개시 턴에서 보류에 들어간다.
-    config: { blackout: "23:00-07:00", daily_call_limit: "5" },
+    // 계획(1건), 판정 턴(목표 둘·예약·답 4건), 정리(1건)까지 쓰고, 22:50 개시 턴에서 보류에 들어간다.
+    config: { blackout: "23:00-07:00", daily_call_limit: "6" },
   });
   await app.user("오늘 뭐 하지");
 
@@ -269,9 +270,9 @@ test("111a: 흐름도 정리 대기도 없으면 날 넘김은 보류 중에 돌
 test("111b: 보류 중 블랙아웃에 온 메시지는 흐름 밖 판정 대기로 남아 해제·블랙아웃 끝 뒤에 판정된다", async (t) => {
   const app = await startApp(t, {
     at: "2026-10-30 22:00",
-    config: { blackout: "23:00-07:00", ...ONLY_ONE_CALL_A_DAY },
+    config: { blackout: "23:00-07:00", ...ONE_TURN_A_DAY },
   });
-  await spendTheOnlyDailyCall(app);
+  await spendTheOnlyTurnCall(app);
   await app.user("하나 더");
   await app.advanceTo("23:30");
   assert.equal(holdState(app).hold_reason, "daily_limit");
@@ -297,7 +298,7 @@ test("112: 자정을 넘겨 재시작하면 첫 LLM 요청 직전에 daily_calls
   await app.user("밤 인사");
   await app.advance({ seconds: 20 });
   assert.deepEqual(app.row("SELECT daily_calls, daily_calls_date FROM harness_state"), {
-    daily_calls: 1,
+    daily_calls: 2,
     daily_calls_date: "2026-10-29",
   });
 
@@ -306,7 +307,7 @@ test("112: 자정을 넘겨 재시작하면 첫 LLM 요청 직전에 daily_calls
   await app.advance({ seconds: 20 });
 
   assert.deepEqual(app.row("SELECT daily_calls, daily_calls_date FROM harness_state"), {
-    daily_calls: 1,
+    daily_calls: 2,
     daily_calls_date: "2026-10-30",
   });
 });

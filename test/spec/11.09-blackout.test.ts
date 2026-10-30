@@ -93,7 +93,7 @@ test("74: 블랙아웃 진입 시 흐름이 열려 있으면 닫기 → 정리 �
       (plan) => plan.finishPlan(),
       (plan) => {
         goalStatesSeenByPlan.push(...app.rows("SELECT state FROM goals"));
-        plan.finishPlan();
+        return plan.finishPlan();
       },
     )
     .onTurn(async (turn) => {
