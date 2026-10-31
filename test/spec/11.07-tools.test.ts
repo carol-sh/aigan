@@ -30,6 +30,12 @@ function goalArgs(title: string, extra: Record<string, unknown> = {}) {
   return { job_id: "sample", title, done_criteria: "끝", ...extra };
 }
 
+/** goal_create는 지시를 쓰기 전에 기준을 보게 방침 본문을 함께 돌려준다. */
+function created(app: TestApp, goalId: number): ToolResult {
+  const job = app.harness.ctx.prompts.jobPolicies.find((policy) => policy.id === "sample")!;
+  return { ok: true, goal_id: goalId, job_prompt: job.prompt };
+}
+
 test("49: 활성 목표가 goal_max_active개면 goal_create는 거부되고 턴은 계속된다", async (t) => {
   const results: ToolResult[] = [];
   const app = await startWithUserTurn(
@@ -41,10 +47,7 @@ test("49: 활성 목표가 goal_max_active개면 goal_create는 거부되고 턴
     { config: { goal_max_active: "2" } },
   );
 
-  assert.deepEqual(results.slice(0, 2), [
-    { ok: true, goal_id: 1 },
-    { ok: true, goal_id: 2 },
-  ]);
+  assert.deepEqual(results.slice(0, 2), [created(app, 1), created(app, 2)]);
   assertRejected(results[2], /2개/);
   assert.deepEqual(app.telegram.sent, ["응"]);
   assert.equal(app.rows("SELECT id FROM goals").length, 2);
@@ -458,7 +461,7 @@ test("한 답에서 부른 도구 여러 개는 순서대로 실행되고 각자
     ]);
   });
 
-  assert.deepEqual(results, [{ ok: true, goal_id: 1 }, { ok: true }]);
+  assert.deepEqual(results, [created(app, 1), { ok: true }]);
   assert.equal(app.llm.requestsOf("turn").length, 2);
   assert.equal(app.row("SELECT progress FROM goals").progress, "한 잔");
 });
@@ -582,4 +585,14 @@ test("61a, 90d: 턴 입력의 기억은 state 전문과 칸 제목뿐이고, 정
   const input = app.llm.lastInput("turn");
   assert.deepEqual(inputSection(input, "기억"), ["오늘은 일찍 끝냄", "칸: 습관, 약점"]);
   assert.ok(!input.includes("6시에 일어난다"));
+});
+
+test("goal_create는 진행 메모를 함께 받아 한 라운드에 단계 계획까지 적는다", async (t) => {
+  const app = await startWithUserTurn(t, async (turn) => {
+    await turn.use("goal_create", goalArgs("문제 하나", { progress: "① 가져오기 / ② 아이디어" }));
+  });
+
+  assert.deepEqual(app.rows("SELECT title, progress FROM goals"), [
+    { title: "문제 하나", progress: "① 가져오기 / ② 아이디어" },
+  ]);
 });

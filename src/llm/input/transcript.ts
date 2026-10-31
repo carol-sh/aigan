@@ -1,4 +1,5 @@
 import type { DateTime } from "luxon";
+import type { MemoryRepository } from "../../db/repositories/memory.ts";
 import type { Message } from "../../db/repositories/messages.ts";
 import type { Reservation } from "../../db/repositories/reservations.ts";
 import { fromDbTime } from "../../time.ts";
@@ -53,11 +54,43 @@ export function formatShortTime(time: DateTime, { now, timezone }: TimeView): st
   return local.toFormat(isToday ? "HH:mm" : "MM-dd HH:mm");
 }
 
-export function renderMemory(state: string, sectionTitles: string[]): string[] {
+/** 기억 절에 보일 것. 칸은 모두 제목이 보이고, `content`가 있는 칸만 본문까지 보인다. */
+export interface MemoryView {
+  state: string;
+  sections: { title: string; content: string | undefined }[];
+}
+
+/**
+ * 비추론 모델은 `memory_read`를 자주 건너뛴다. 그래서 본문이 꼭 필요한 호출(정리·계획, 턴은 설정한 칸)은
+ * 본문을 입력에 넣는다.
+ */
+export function viewMemory(
+  memory: MemoryRepository,
+  showsBody: (title: string) => boolean,
+): MemoryView {
+  return {
+    state: memory.readState(),
+    sections: memory.listSections().map(({ title, content }) => ({
+      title,
+      content: showsBody(title) ? content : undefined,
+    })),
+  };
+}
+
+export function renderMemory({ state, sections }: MemoryView): string[] {
+  const titles = sections.map((section) => section.title);
   return [
     state === "" ? "state: (비어 있음)" : state,
-    `칸: ${sectionTitles.length > 0 ? sectionTitles.join(", ") : NONE}`,
+    `칸: ${titles.length > 0 ? titles.join(", ") : NONE}`,
+    ...sections.flatMap(({ title, content }) =>
+      content === undefined ? [] : [`[칸 ${title}]`, ...indentLines(content)],
+    ),
   ];
+}
+
+/** 본문의 `##` 제목이 입력 문서의 절로 읽히지 않게 들여쓴다. */
+export function indentLines(text: string): string[] {
+  return text.split("\n").map((line) => (line === "" ? line : `  ${line}`));
 }
 
 /** `N분`, `H시간`, `H시간 M분`. 늦은 정도와 되묻기의 남은 시간이 쓴다. */

@@ -10,6 +10,7 @@ import { viewCompactedConversation } from "../../worker/compact.ts";
 import type { TurnTask } from "../../worker/tasks.ts";
 import {
   type ConversationView,
+  type MemoryView,
   NONE,
   type OpeningView,
   type TimeView,
@@ -19,7 +20,9 @@ import {
   renderMemory,
   renderMessages,
   renderOpening,
+  indentLines,
   renderSection,
+  viewMemory,
 } from "./transcript.ts";
 
 /** 턴이 모델에게 보여 줄 것. 무엇을 고를지는 `assembleTurnInput`이, 어떻게 쓸지는 `renderTurnInput`이 정한다. */
@@ -30,7 +33,7 @@ export interface TurnInput {
   jobs: JobPolicy[];
   /** 이 흐름을 연 개시 예약의 방침. 모델이 `job_read`를 건너뛰어도 첫 지시가 본문을 따르게 한다. */
   openedJob: JobPolicy | undefined;
-  memory: { state: string; sectionTitles: string[] };
+  memory: MemoryView;
   planBody: string | undefined;
   previousFlowTail: { endedAt: DateTime; messages: Message[] } | undefined;
   flowConversation: ConversationView;
@@ -69,10 +72,7 @@ export function assembleTurnInput(
     openedJob: ctx.prompts.jobPolicies.find(
       (job) => job.id === (consumedOpening ? consumedOpening.job_id : flow?.opened_job_id),
     ),
-    memory: {
-      state: ctx.memory.readState(),
-      sectionTitles: ctx.memory.listSections().map((section) => section.title),
-    },
+    memory: viewMemory(ctx.memory, (title) => ctx.config.turn_memory_sections.includes(title)),
     planBody: ctx.plans.findBody(planDate),
     previousFlowTail: findPreviousFlowTail(
       ctx,
@@ -155,7 +155,7 @@ export function renderTurnInput(
       input.jobs.map((job) => `- ${job.id}: ${job.description}`),
     ),
     renderSection("이번 흐름 방침", renderOpenedJob(input.openedJob)),
-    renderSection("기억", renderMemory(input.memory.state, input.memory.sectionTitles)),
+    renderSection("기억", renderMemory(input.memory)),
     renderSection("오늘 계획", [input.planBody ?? "(계획 전)"]),
     renderSection("직전 흐름", renderPreviousFlowTail(input.previousFlowTail, view)),
     renderSection("흐름 대화", renderConversation(input.flowConversation, view)),
@@ -178,14 +178,9 @@ export function renderTurnInput(
   ];
 }
 
-/** 방침 본문의 `##` 제목이 입력 문서의 절로 읽히지 않게 들여쓴다. 활성 목표의 방침 사본과 같다. */
 function renderOpenedJob(job: JobPolicy | undefined): string[] {
   if (job === undefined) return [];
-  return [`${job.id}: ${job.description}`, ...job.prompt.split("\n").map(indentLine)];
-}
-
-function indentLine(line: string): string {
-  return line === "" ? line : `  ${line}`;
+  return [`${job.id}: ${job.description}`, ...indentLines(job.prompt)];
 }
 
 function renderPreviousFlowTail(tail: TurnInput["previousFlowTail"], view: TimeView): string[] {

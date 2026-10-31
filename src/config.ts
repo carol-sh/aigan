@@ -65,7 +65,7 @@ const configSchema = z
     cleanup_max_attempts: positiveCount(5),
     cleanup_backoff_first_sec: positiveSeconds(30),
     cleanup_backoff_cap_sec: positiveSeconds(300),
-    max_tool_rounds: positiveCount(3),
+    max_tool_rounds: positiveCount(4),
     max_cleanup_tool_rounds: positiveCount(5),
 
     goal_max_active: positiveCount(8),
@@ -79,6 +79,15 @@ const configSchema = z
     state_max_chars: positiveCount(1000),
     memory_section_max_chars: positiveCount(8000),
     memory_max_sections: positiveCount(10),
+    turn_memory_sections: z
+      .string()
+      .default("")
+      .transform((text) =>
+        text
+          .split(",")
+          .map((title) => title.trim())
+          .filter((title) => title !== ""),
+      ),
   })
   .refine((config) => isKnownTimezone(config.timezone), {
     path: ["timezone"],

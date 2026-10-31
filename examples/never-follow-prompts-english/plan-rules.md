@@ -25,7 +25,7 @@ The last answer is one JSON object.
 
 ## Input
 
-The sections arrive as `## 방침`, `## 기억`, `## 활성 목표`, `## 최근 종료 목표`, `## 남아 있는 개시 예약`, `## 계획일`. An empty section says `(없음)`. Read a section body with `memory_read(title)` when you need it. Before you place the day, read `사용자` and `전략`. Read `관계` when yesterday ended cold.
+The sections arrive as `## 방침`, `## 기억`, `## 활성 목표`, `## 최근 종료 목표`, `## 남아 있는 개시 예약`, `## 계획일`. An empty section says `(없음)`. Every section body is in `## 기억`, under its `[칸 제목]` line and indented. Before you place the day, go through `사용자` and `전략`. Look at `관계` when yesterday ended cold. `memory_read(title)` exists, but you do not need it here.
 
 ## Choosing policies
 

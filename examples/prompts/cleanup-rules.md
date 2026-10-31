@@ -18,12 +18,12 @@ After the tools, the last answer is one JSON object, `{}`.
 
 ## Tools
 
-- `memory_read(title)`: a section body.
+- `memory_read(title)`: a section body. You rarely need it: the bodies are in the input. It reads what you wrote earlier in this call.
 - `state_write(content)`: replace the whole state.
 - `memory_write(title, content)`: replace a whole section. Creates it if it is missing.
 - `memory_delete(title)`: delete a section.
 
-Writes replace the whole text. Read an existing section with `memory_read` first, then write it back merged with this conversation. Writing without reading erases the old record. If a write is rejected, shorten it to the limit in the reason and try again.
+Writes replace the whole text. Every section body is already in `## 기억`, under its `[칸 제목]` line and indented. Write a section back merged from that body and this conversation. Writing from this conversation alone erases the old record. If a write is rejected, shorten it to the limit in the reason and try again.
 
 Do not record anything that was not in the conversation. Do not invent a past, or an inner state, that nobody said.
 

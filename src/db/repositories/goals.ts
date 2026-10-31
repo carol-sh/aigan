@@ -26,6 +26,7 @@ export interface NewGoal {
   jobSnapshot: string;
   title: string;
   doneCriteria: string;
+  progress?: string;
   dueAt: DateTime | null;
   planDate: PlanDate;
   createdAt: DateTime;
@@ -45,8 +46,8 @@ export class GoalRepository {
   create(goal: NewGoal): number {
     const result = this.#db
       .prepare(
-        `INSERT INTO goals (id, job_id, job_snapshot, title, done_criteria, due_at, plan_date, state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+        `INSERT INTO goals (id, job_id, job_snapshot, title, done_criteria, progress, due_at, plan_date, state, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
       )
       .run(
         goal.id ?? null,
@@ -54,6 +55,7 @@ export class GoalRepository {
         goal.jobSnapshot,
         goal.title,
         goal.doneCriteria,
+        goal.progress ?? "",
         goal.dueAt && toDbTime(goal.dueAt),
         goal.planDate,
         toDbTime(goal.createdAt),

@@ -6,6 +6,7 @@ import { type PlanDate, fromDbTime } from "../../time.ts";
 import type { HarnessContext } from "../../worker/context.ts";
 import { formatLocalTime } from "../../worker/reservation-times.ts";
 import {
+  type MemoryView,
   NONE,
   type OpeningView,
   type TimeView,
@@ -13,6 +14,7 @@ import {
   renderMemory,
   renderOpening,
   renderSection,
+  viewMemory,
 } from "./transcript.ts";
 
 export interface PlanInput {
@@ -21,7 +23,7 @@ export interface PlanInput {
   awakeFrom: DateTime;
   endOfDay: DateTime;
   jobs: JobPolicy[];
-  memory: { state: string; sectionTitles: string[] };
+  memory: MemoryView;
   activeGoals: Goal[];
   recentlyClosedGoals: Goal[];
   previousPlanDate: PlanDate;
@@ -36,10 +38,8 @@ export function assemblePlanInput(ctx: HarnessContext, planDate: PlanDate): Plan
     awakeFrom: ctx.calendar.blackoutEndOf(planDate),
     endOfDay: ctx.calendar.endOfDay(planDate),
     jobs: ctx.prompts.jobPolicies,
-    memory: {
-      state: ctx.memory.readState(),
-      sectionTitles: ctx.memory.listSections().map((section) => section.title),
-    },
+    // 하루 한 번이라 칸 본문을 다 넣어도 싸다. 배치는 사용자 기록을 보고 정해야 한다.
+    memory: viewMemory(ctx.memory, () => true),
     activeGoals: ctx.goals.findActive(),
     recentlyClosedGoals: ctx.goals.findClosedSince(
       now.minus({ days: ctx.config.recent_goal_days }),
@@ -62,7 +62,7 @@ export function renderPlanInput(
       "방침",
       input.jobs.map((job) => `- ${job.id}: ${job.description}`),
     ),
-    renderSection("기억", renderMemory(input.memory.state, input.memory.sectionTitles)),
+    renderSection("기억", renderMemory(input.memory)),
     renderSection(
       "활성 목표",
       input.activeGoals.map((goal) => renderActiveGoal(goal, timezone)),

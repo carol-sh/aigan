@@ -8,16 +8,18 @@ import { formatLocalTime } from "../../worker/reservation-times.ts";
 import { countChars, viewCompactedConversation } from "../../worker/compact.ts";
 import {
   type ConversationView,
+  type MemoryView,
   NONE,
   type TimeView,
   renderConversation,
   renderMemory,
   renderSection,
+  viewMemory,
 } from "./transcript.ts";
 
 export interface CleanupInput {
   flow: Flow;
-  memory: { state: string; sectionTitles: string[] };
+  memory: MemoryView;
   goals: { goal: Goal; isInFlow: boolean }[];
   conversation: ConversationView;
 }
@@ -26,10 +28,8 @@ export function assembleCleanupInput(ctx: HarnessContext, flowId: number): Clean
   const flow = ctx.flows.findById(flowId)!;
   return {
     flow,
-    memory: {
-      state: ctx.memory.readState(),
-      sectionTitles: ctx.memory.listSections().map((section) => section.title),
-    },
+    // 쓰기가 통째 교체라 읽지 않고 쓰면 누적 기록이 사라진다. 정리는 칸을 다시 쓰는 일이라 본문을 다 준다.
+    memory: viewMemory(ctx.memory, () => true),
     goals: ctx.goals
       .findForCleanup(flow.id, flow.plan_date)
       .map(({ is_in_flow, ...goal }) => ({ goal, isInFlow: is_in_flow === 1 })),
@@ -55,7 +55,7 @@ export function renderCleanupInput(
   view: TimeView,
 ): ChatCompletionMessageParam[] {
   const document = [
-    renderSection("기억", renderMemory(input.memory.state, input.memory.sectionTitles)),
+    renderSection("기억", renderMemory(input.memory)),
     renderSection("흐름", renderFlow(input.flow, view.timezone)),
     renderSection(`목표 (계획일 ${input.flow.plan_date})`, input.goals.map(renderGoal)),
     renderSection("대화", renderConversation(input.conversation, view)),

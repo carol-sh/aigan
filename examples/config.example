@@ -36,7 +36,7 @@ turn_max_attempts=3
 cleanup_max_attempts=5
 cleanup_backoff_first_sec=30
 cleanup_backoff_cap_sec=300
-max_tool_rounds=3
+max_tool_rounds=4
 max_cleanup_tool_rounds=5
 
 # 상한
@@ -51,3 +51,5 @@ cleanup_raw_max_chars=60000
 state_max_chars=1000
 memory_section_max_chars=8000
 memory_max_sections=10
+# 턴 입력에 본문까지 넣을 기억 칸(쉼표로 구분). 나머지 칸은 제목만 보이고 memory_read로 읽는다
+turn_memory_sections=전략,관계

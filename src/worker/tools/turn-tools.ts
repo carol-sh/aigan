@@ -41,6 +41,10 @@ export function createTurnTools(scope: TurnToolScope): ToolBox {
         job_id: z.string(),
         title: z.string().min(1),
         done_criteria: z.string(),
+        progress: z
+          .string()
+          .optional()
+          .describe("단계 계획. 만들 때 한 번에 적어 도구 라운드를 아낀다"),
         due_at: localTime.optional(),
       }),
       run(args) {
@@ -56,11 +60,13 @@ export function createTurnTools(scope: TurnToolScope): ToolBox {
           jobSnapshot: job.prompt,
           title: args.title,
           doneCriteria: args.done_criteria,
+          progress: args.progress,
           dueAt: dueAt ?? null,
           planDate,
           createdAt: now(),
         });
-        return { ok: true, goal_id: goalId };
+        // 모델이 job_read를 건너뛰어도 지시를 쓰기 전에 그 방침의 기준을 보게 한다.
+        return { ok: true, goal_id: goalId, job_prompt: job.prompt };
       },
     }),
 

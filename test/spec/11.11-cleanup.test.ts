@@ -263,3 +263,36 @@ test("90a, 90c, 90k: 정리 입력은 규칙만 system에 두고, 흐름 정보�
   }
   assert.ok(String(app.llm.requestsOf("turn")[0]?.messages[0]?.content).startsWith("까칠한 코치"));
 });
+
+test("정리 입력의 기억은 칸 본문까지 들여써서 모두 보여 준다. 쓰기가 통째 교체라 읽지 않고 쓰면 기록이 사라져서다", async (t) => {
+  const llm = new ScriptedLlm()
+    .onTurn(
+      (turn) => turn.end("그래"),
+      (turn) => turn.end("또 왔네"),
+    )
+    .onCleanup(
+      async (cleanup) => {
+        await cleanup.use("memory_write", {
+          title: "전략",
+          content: "## 장부\n- 10-30 | 핑계 | 반려",
+        });
+        await cleanup.use("memory_write", { title: "관계", content: "register: elevated" });
+      },
+      async () => {},
+    );
+  const app = await startApp(t, { llm });
+  await app.user("오늘 끝");
+  await app.advance({ seconds: 20 });
+  await app.user("다시 왔어");
+  await app.advance({ seconds: 20 });
+
+  assert.deepEqual(inputSection(app.llm.inputs("cleanup")[1]!, "기억"), [
+    "state: (비어 있음)",
+    "칸: 관계, 전략",
+    "[칸 관계]",
+    "  register: elevated",
+    "[칸 전략]",
+    "  ## 장부",
+    "  - 10-30 | 핑계 | 반려",
+  ]);
+});

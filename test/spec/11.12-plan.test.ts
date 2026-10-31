@@ -172,7 +172,12 @@ test("95: 계획 입력은 plan-rules만 system에 두고, 방침·기억·지�
   assert.deepEqual(inputSection(input, "방침"), [
     "- sample: 한 줄 설명. 계획과 턴의 방침 목록에 이 줄이 보인다",
   ]);
-  assert.deepEqual(inputSection(input, "기억"), ["아침형", "칸: 습관"]);
+  assert.deepEqual(inputSection(input, "기억"), [
+    "아침형",
+    "칸: 습관",
+    "[칸 습관]",
+    "  저녁에 끝낸다",
+  ]);
   assert.deepEqual(inputSection(input, "활성 목표"), ["(없음)"]);
   assert.deepEqual(inputSection(input, "최근 종료 목표"), [
     "- #2 책 (sample) [expired] 날 넘김 — 10-29 10:00 종료",
