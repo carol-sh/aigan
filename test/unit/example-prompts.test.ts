@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { Config } from "../../src/config.ts";
@@ -19,6 +19,10 @@ import { ScriptedLlm, inputSection } from "../fakes/scripted-llm.ts";
 import { startApp } from "../rig.ts";
 
 const EXAMPLE_PROMPTS_DIR = "examples/prompts";
+/** 성향이 다른 예시 세트도 같은 하네스에 넣으므로 출력 예시는 세트마다 본다. */
+const EXAMPLE_PROMPT_SETS = readdirSync("examples")
+  .map((name) => join("examples", name))
+  .filter((dir) => existsSync(join(dir, "turn-rules.md")));
 const TIMEZONE = "Asia/Seoul";
 
 // 이름만 읽으므로 도구가 실제로 쓰는 의존은 비워 둔다.
@@ -26,8 +30,8 @@ const turnToolNames = createTurnTools({} as TurnToolScope).names;
 const planToolNames = createPlanTools({} as HarnessContext).names;
 const cleanupToolNames = createCleanupTools({} as Config, {} as MemoryChanges).names;
 
-function readExample(fileName: string): string {
-  return readFileSync(join(EXAMPLE_PROMPTS_DIR, fileName), "utf8");
+function readExample(fileName: string, promptsDir = EXAMPLE_PROMPTS_DIR): string {
+  return readFileSync(join(promptsDir, fileName), "utf8");
 }
 
 function jsonExamples(text: string): string[] {
@@ -61,6 +65,8 @@ test("턴 규칙은 턴 도구 전부와 출력 필드, 계기 네 가지, 되�
     "messages",
     "next",
     "continue_at",
+    "job_id",
+    "이번 흐름 방침",
     '"continue"',
     '"end"',
     "YYYY-MM-DD HH:mm",
@@ -79,6 +85,7 @@ test("계획·정리·압축 규칙은 각자의 도구와 출력 필드를 말�
     "openings",
     "at",
     "intent",
+    "job_id",
     "goal_ids",
     "YYYY-MM-DD HH:mm",
   ]);
@@ -86,37 +93,37 @@ test("계획·정리·압축 규칙은 각자의 도구와 출력 필드를 말�
   assertMentionsAll(readExample("compact-rules.md"), ["summary"]);
 });
 
-test("규칙 파일의 출력 예시는 실제 출력 파서를 통과한다", () => {
+test("모든 예시 세트에서 규칙 파일의 출력 예시는 실제 출력 파서를 통과한다", () => {
   const cases = [
     { file: "turn-rules.md", parse: turnOutputParser("reply", TIMEZONE) },
     { file: "plan-rules.md", parse: planOutputParser(TIMEZONE) },
     { file: "cleanup-rules.md", parse: parseCleanupOutput },
     { file: "compact-rules.md", parse: parseCompactOutput },
   ];
-  for (const { file, parse } of cases) {
-    const examples = jsonExamples(readExample(file));
-    assert.ok(examples.length > 0, `${file}에 출력 예시가 없다`);
-    for (const example of examples) {
-      const parsed = parse(example);
-      assert.ok(
-        parsed.ok,
-        `${file}의 예시가 파서를 통과하지 못한다: ${!parsed.ok && parsed.error}`,
-      );
-      assertLocalTimesWellFormed(example);
+  for (const promptsDir of EXAMPLE_PROMPT_SETS) {
+    for (const { file, parse } of cases) {
+      const path = join(promptsDir, file);
+      const examples = jsonExamples(readExample(file, promptsDir));
+      assert.ok(examples.length > 0, `${path}에 출력 예시가 없다`);
+      for (const example of examples) {
+        const parsed = parse(example);
+        assert.ok(
+          parsed.ok,
+          `${path}의 예시가 파서를 통과하지 못한다: ${!parsed.ok && parsed.error}`,
+        );
+        assertLocalTimesWellFormed(example);
+      }
     }
   }
 });
 
-test("예시 세트로 부팅하면 계획·턴·정리 요청의 system이 그 파일들이고 방침 목록에 예시 방침이 나온다", async (t) => {
+test("예시 세트로 부팅하면 계획·턴·정리 요청의 system이 그 파일들이고, 방침 목록과 개시 턴의 이번 흐름 방침에 예시 방침이 나온다", async (t) => {
   const jobId = loadPrompts(EXAMPLE_PROMPTS_DIR).jobPolicies[0]!.id;
   const llm = new ScriptedLlm()
     .onPlan((plan) =>
-      plan.finishPlan({ openings: [{ at: "10:30", intent: "알고리즘 노트: 문제 가져오게 하기" }] }),
+      plan.finishPlan({ openings: [{ at: "10:30", intent: "문제 가져오게 하기", jobId }] }),
     )
-    .onTurn(async (turn) => {
-      await turn.use("job_read", { job_id: jobId });
-      return turn.end("노트북 켜. 9시에 문제 하나.");
-    })
+    .onTurn((turn) => turn.end("노트북 켜. 9시에 문제 하나."))
     .onCleanup(async (cleanup) => {
       await cleanup.use("state_write", { content: "알고리즘 노트 0문제" });
     });
@@ -133,5 +140,13 @@ test("예시 세트로 부팅하면 계획·턴·정리 요청의 system이 그 
     inputSection(llm.lastInput("turn"), "방침"),
     prompts.jobPolicies.map((job) => `- ${job.id}: ${job.description}`),
   );
+  const job = prompts.jobPolicies[0]!;
+  assert.deepEqual(inputSection(llm.lastInput("turn"), "이번 흐름 방침"), [
+    `${job.id}: ${job.description}`,
+    ...job.prompt
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => `  ${line}`),
+  ]);
   assert.equal(app.row("SELECT content FROM memory_state")?.content, "알고리즘 노트 0문제");
 });

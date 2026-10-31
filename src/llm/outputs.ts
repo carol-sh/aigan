@@ -53,6 +53,8 @@ const planOutputSchema = z.object({
     z.object({
       at: z.string(),
       intent: z.string().trim().min(1, "intent가 비었다"),
+      // 비추론 모델이 빼먹지 않고 매번 고르게 키를 필수로 둔다. 방침의 일이 아니면 null이다.
+      job_id: z.string().nullable(),
       goal_ids: z.array(z.number().int()).optional(),
     }),
   ),
@@ -66,7 +68,12 @@ export function planOutputParser(timezone: string): OutputParser<PlanOutput> {
     for (const opening of parsed.value.openings) {
       const at = parseLocalTime(opening.at, timezone);
       if (at === undefined) return failed(`at ${opening.at}는 YYYY-MM-DD HH:mm 형식이 아니다`);
-      openings.push({ at, intent: opening.intent, goalIds: opening.goal_ids ?? [] });
+      openings.push({
+        at,
+        intent: opening.intent,
+        jobId: opening.job_id ?? undefined,
+        goalIds: opening.goal_ids ?? [],
+      });
     }
     return { ok: true, value: { body: parsed.value.body, openings } };
   };

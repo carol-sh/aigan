@@ -28,6 +28,8 @@ export interface TurnInput {
   now: DateTime;
   endOfDay: DateTime;
   jobs: JobPolicy[];
+  /** 이 흐름을 연 개시 예약의 방침. 모델이 `job_read`를 건너뛰어도 첫 지시가 본문을 따르게 한다. */
+  openedJob: JobPolicy | undefined;
   memory: { state: string; sectionTitles: string[] };
   planBody: string | undefined;
   previousFlowTail: { endedAt: DateTime; messages: Message[] } | undefined;
@@ -64,6 +66,9 @@ export function assembleTurnInput(
     now,
     endOfDay: ctx.calendar.endOfDay(planDate),
     jobs: ctx.prompts.jobPolicies,
+    openedJob: ctx.prompts.jobPolicies.find(
+      (job) => job.id === (consumedOpening ? consumedOpening.job_id : flow?.opened_job_id),
+    ),
     memory: {
       state: ctx.memory.readState(),
       sectionTitles: ctx.memory.listSections().map((section) => section.title),
@@ -149,6 +154,7 @@ export function renderTurnInput(
       "방침",
       input.jobs.map((job) => `- ${job.id}: ${job.description}`),
     ),
+    renderSection("이번 흐름 방침", renderOpenedJob(input.openedJob)),
     renderSection("기억", renderMemory(input.memory.state, input.memory.sectionTitles)),
     renderSection("오늘 계획", [input.planBody ?? "(계획 전)"]),
     renderSection("직전 흐름", renderPreviousFlowTail(input.previousFlowTail, view)),
@@ -170,6 +176,16 @@ export function renderTurnInput(
     { role: "system", content: [prompts.persona, prompts.turnRules].filter(Boolean).join("\n\n") },
     { role: "user", content: document },
   ];
+}
+
+/** 방침 본문의 `##` 제목이 입력 문서의 절로 읽히지 않게 들여쓴다. 활성 목표의 방침 사본과 같다. */
+function renderOpenedJob(job: JobPolicy | undefined): string[] {
+  if (job === undefined) return [];
+  return [`${job.id}: ${job.description}`, ...job.prompt.split("\n").map(indentLine)];
+}
+
+function indentLine(line: string): string {
+  return line === "" ? line : `  ${line}`;
 }
 
 function renderPreviousFlowTail(tail: TurnInput["previousFlowTail"], view: TimeView): string[] {

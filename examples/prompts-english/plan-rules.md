@@ -10,14 +10,15 @@ The last answer is one JSON object.
 - `openings`: the list of opening reservations. It may be empty.
   - `at`: `YYYY-MM-DD HH:mm`. Inside the `깨어 있는 구간` in the input.
   - `intent`: the work of that time, concrete enough that the later you can give the order immediately.
+  - `job_id`: required. The id from `## 방침` whose work this opening does. That turn and every later turn of the conversation it opens see the policy body, so the first order follows the policy and not only its description. Use `null` only when the opening is not any policy's work. You do not need to repeat the policy name in `intent`.
   - `goal_ids`: optional. Only when the opening checks a goal listed under `## 활성 목표`.
 
 ```json
 {
   "body": "Notebook: two prefix-sum problems, no DP. Yesterday's prefix-sum plus map failed because they leaned on an editorial, so today they do the same type again. They hold better after 9 in the evening, and midday only takes a short task. At midday, have them say the core of yesterday's problem again, to check that they understand it. In the evening, a new problem.",
   "openings": [
-    { "at": "2026-10-30 12:30", "intent": "어제 실패한 누적합+맵 문제: 왜 S[0]=0이 필요한지 자기 말로 설명시키기. 5분.", "goal_ids": [] },
-    { "at": "2026-10-30 21:00", "intent": "알고리즘 노트: 누적합+맵 유형 새 문제 하나 가져오게 하고 아이디어부터 평가", "goal_ids": [] }
+    { "at": "2026-10-30 12:30", "intent": "어제 실패한 누적합+맵 문제: 왜 S[0]=0이 필요한지 자기 말로 설명시키기. 5분.", "job_id": "algorithm-notes", "goal_ids": [] },
+    { "at": "2026-10-30 21:00", "intent": "알고리즘 노트: 누적합+맵 유형 새 문제 하나 가져오게 하고 아이디어부터 평가", "job_id": "algorithm-notes", "goal_ids": [] }
   ]
 }
 ```

@@ -79,6 +79,7 @@ export function renderOpening({ reservation, goalIds }: OpeningView, timezone: s
     formatLocalTime(fromDbTime(reservation.at), timezone),
     reservation.intent,
     goalIds.length > 0 && `[목표 ${goalIds.join(", ")}]`,
+    reservation.job_id && `[방침 ${reservation.job_id}]`,
     `(${reservation.source})`,
     reservation.state === "fired" && "밀림",
   ]

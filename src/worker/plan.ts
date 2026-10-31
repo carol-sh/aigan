@@ -10,7 +10,7 @@ import type { ToolBox } from "./tools/tool-box.ts";
 
 export interface PlanOutput {
   body: string;
-  openings: { at: DateTime; intent: string; goalIds: number[] }[];
+  openings: { at: DateTime; intent: string; jobId?: string; goalIds: number[] }[];
 }
 
 export interface PlanRequest {
@@ -90,6 +90,7 @@ function fitOpenings(
       .filter((goal) => goal.plan_date === planDate)
       .map((goal) => goal.id),
   );
+  const jobIds = new Set(ctx.prompts.jobPolicies.map((job) => job.id));
   const fitted: PlanOutput["openings"] = [];
   for (const opening of openings) {
     const time = fitOpeningTime(ctx, opening.at, planDate, now);
@@ -103,9 +104,16 @@ function fitOpenings(
         `계획 예약에서 활성 목표가 아닌 것을 뺐다(${unknownGoalIds.map((id) => `#${id}`).join(", ")}): ${describeOpening(ctx, opening)}`,
       );
     }
+    const isKnownJob = opening.jobId === undefined || jobIds.has(opening.jobId);
+    if (!isKnownJob) {
+      ctx.logger.info(
+        `계획 예약에서 없는 방침을 뺐다(${opening.jobId}): ${describeOpening(ctx, opening)}`,
+      );
+    }
     fitted.push({
       at: time.at,
       intent: opening.intent,
+      jobId: isKnownJob ? opening.jobId : undefined,
       goalIds: opening.goalIds.filter((id) => activeGoalIds.has(id)),
     });
   }

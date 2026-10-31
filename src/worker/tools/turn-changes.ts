@@ -20,6 +20,8 @@ export interface WorkingOpening {
 export interface OpeningChanges {
   at?: DateTime;
   intent?: string;
+  /** null은 방침을 뗀다. */
+  jobId?: string | null;
   goalIds?: number[];
 }
 

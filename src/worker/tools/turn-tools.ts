@@ -16,6 +16,7 @@ export interface TurnToolScope {
 
 const localTime = z.string().describe("설정 시간대의 로컬 시각 YYYY-MM-DD HH:mm");
 const goalIds = z.array(z.number().int());
+const jobId = z.string().describe("이 개입이 하는 방침 id. 그 흐름의 턴이 방침 본문을 본다");
 
 export function createTurnTools(scope: TurnToolScope): ToolBox {
   const { ctx, changes, planDate } = scope;
@@ -97,8 +98,16 @@ export function createTurnTools(scope: TurnToolScope): ToolBox {
 
     open_reserve: defineTool({
       description: "새 흐름을 열 개시 예약을 잡는다",
-      args: z.object({ at: localTime, intent: z.string().min(1), goal_ids: goalIds.default([]) }),
+      args: z.object({
+        at: localTime,
+        intent: z.string().min(1),
+        job_id: jobId.optional(),
+        goal_ids: goalIds.default([]),
+      }),
       run(args) {
+        const jobRejection =
+          args.job_id === undefined ? undefined : rejectUnknownJob(scope, args.job_id);
+        if (jobRejection) return jobRejection;
         const goalsRejection = rejectInvalidGoalIds(scope, args.goal_ids);
         if (goalsRejection) return goalsRejection;
         if (changes.countOpeningsUnderLimit() >= ctx.config.open_max_pending) {
@@ -109,6 +118,7 @@ export function createTurnTools(scope: TurnToolScope): ToolBox {
         const reservationId = changes.scheduleOpening({
           at,
           intent: args.intent,
+          jobId: args.job_id,
           planDate,
           source: "turn",
           goalIds: args.goal_ids,
@@ -128,15 +138,19 @@ export function createTurnTools(scope: TurnToolScope): ToolBox {
         reservation_id: z.number().int(),
         at: localTime.optional(),
         intent: z.string().min(1).optional(),
+        job_id: jobId.nullable().optional(),
         goal_ids: goalIds.optional(),
       }),
       run(args) {
         if (changes.findOpening(args.reservation_id) === undefined) {
           return rejected(`${args.reservation_id}는 개시 예약이 아니다`);
         }
-        if (args.at === undefined && args.intent === undefined && args.goal_ids === undefined) {
-          return rejected("바꿀 필드가 없다");
-        }
+        const hasNoChange = [args.at, args.intent, args.job_id, args.goal_ids].every(
+          (value) => value === undefined,
+        );
+        if (hasNoChange) return rejected("바꿀 필드가 없다");
+        const jobRejection = args.job_id == null ? undefined : rejectUnknownJob(scope, args.job_id);
+        if (jobRejection) return jobRejection;
         const goalsRejection = args.goal_ids && rejectInvalidGoalIds(scope, args.goal_ids);
         if (goalsRejection) return goalsRejection;
         const at = args.at === undefined ? undefined : fitRequestedOpeningTime(scope, args.at);
@@ -144,6 +158,7 @@ export function createTurnTools(scope: TurnToolScope): ToolBox {
         changes.updateOpening(args.reservation_id, {
           at,
           intent: args.intent,
+          jobId: args.job_id,
           goalIds: args.goal_ids,
         });
         return { ok: true };
@@ -174,6 +189,12 @@ class Rejection {
 
 function findJob({ ctx }: TurnToolScope, jobId: string) {
   return ctx.prompts.jobPolicies.find((job) => job.id === jobId);
+}
+
+function rejectUnknownJob(scope: TurnToolScope, jobId: string): ToolResult | undefined {
+  if (findJob(scope, jobId) !== undefined) return undefined;
+  const knownIds = scope.ctx.prompts.jobPolicies.map((job) => job.id).join(", ");
+  return rejected(`방침 ${jobId}가 없다. 있는 방침: ${knownIds}`);
 }
 
 function parseRequestedTime({ ctx }: TurnToolScope, text: string): DateTime | Rejection {

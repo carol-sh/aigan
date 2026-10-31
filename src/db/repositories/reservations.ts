@@ -11,6 +11,7 @@ export interface Reservation {
   state: "scheduled" | "fired";
   flow_id: number | null;
   intent: string | null;
+  job_id: string | null;
   plan_date: PlanDate | null;
   source: ReservationSource;
   created_at: string;
@@ -21,6 +22,8 @@ export interface NewOpening {
   id?: number;
   at: DateTime;
   intent: string;
+  /** 이 개입이 하는 방침. 그 흐름의 턴이 본문을 본다. */
+  jobId?: string;
   planDate: PlanDate;
   source: ReservationSource;
   goalIds: number[];
@@ -76,13 +79,14 @@ export class ReservationRepository {
   scheduleOpening(opening: NewOpening): number {
     const result = this.#db
       .prepare(
-        `INSERT INTO reservations (id, kind, at, intent, plan_date, source, created_at)
-         VALUES (?, 'open', ?, ?, ?, ?, ?)`,
+        `INSERT INTO reservations (id, kind, at, intent, job_id, plan_date, source, created_at)
+         VALUES (?, 'open', ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opening.id ?? null,
         toDbTime(opening.at),
         opening.intent,
+        opening.jobId ?? null,
         opening.planDate,
         opening.source,
         toDbTime(opening.createdAt),
@@ -95,7 +99,7 @@ export class ReservationRepository {
   /** `at`을 바꾸면 밀린 개입을 미루는 것이라 `scheduled`로 되돌린다. */
   updateOpening(
     reservationId: number,
-    changes: { at?: DateTime; intent?: string; goalIds?: number[] },
+    changes: { at?: DateTime; intent?: string; jobId?: string | null; goalIds?: number[] },
   ): void {
     if (changes.at !== undefined) {
       this.#db
@@ -106,6 +110,11 @@ export class ReservationRepository {
       this.#db
         .prepare("UPDATE reservations SET intent = ? WHERE id = ?")
         .run(changes.intent, reservationId);
+    }
+    if (changes.jobId !== undefined) {
+      this.#db
+        .prepare("UPDATE reservations SET job_id = ? WHERE id = ?")
+        .run(changes.jobId, reservationId);
     }
     if (changes.goalIds !== undefined) {
       this.#db.prepare("DELETE FROM reservation_goals WHERE reservation_id = ?").run(reservationId);

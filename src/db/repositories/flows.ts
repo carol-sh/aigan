@@ -10,6 +10,7 @@ export interface Flow {
   opener: "ai" | "user";
   opened_by_reservation_id: number | null;
   opened_intent: string | null;
+  opened_job_id: string | null;
   plan_date: PlanDate;
   turn_count: number;
   answered_upto_id: number;
@@ -27,6 +28,7 @@ export interface NewFlow {
   opener: Flow["opener"];
   openedByReservationId: number | null;
   openedIntent: string | null;
+  openedJobId: string | null;
   planDate: PlanDate;
   startedAt: DateTime;
 }
@@ -70,13 +72,14 @@ export class FlowRepository {
   open(flow: NewFlow): number {
     const result = this.#db
       .prepare(
-        `INSERT INTO flows (opener, opened_by_reservation_id, opened_intent, plan_date, started_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO flows (opener, opened_by_reservation_id, opened_intent, opened_job_id, plan_date, started_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         flow.opener,
         flow.openedByReservationId,
         flow.openedIntent,
+        flow.openedJobId,
         flow.planDate,
         toDbTime(flow.startedAt),
       );

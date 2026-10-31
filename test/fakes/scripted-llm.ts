@@ -303,11 +303,13 @@ export class ScriptedTurn {
   async reserveOpening(opening: {
     at: string;
     intent?: string;
+    jobId?: string;
     goalIds?: number[];
   }): Promise<number> {
     const result = await this.#useOrThrow("open_reserve", {
       at: this.time(opening.at),
       intent: opening.intent ?? "개입",
+      job_id: opening.jobId,
       goal_ids: opening.goalIds ?? [],
     });
     return result.reservation_id as number;
@@ -403,6 +405,8 @@ export interface ScriptedOpening {
   /** `HH:mm`이면 지금의 로컬 날짜로 채운다. */
   at: string;
   intent?: string;
+  /** 기본은 방침 없음이라 기존 테스트의 예약 줄이 그대로다. */
+  jobId?: string;
   goalIds?: number[];
 }
 
@@ -428,6 +432,7 @@ export class ScriptedPlan {
       openings: (plan.openings ?? []).map((opening) => ({
         at: formatLocalTime(parseLocalTime(opening.at, timezone, now), timezone),
         intent: opening.intent ?? "개입",
+        job_id: opening.jobId ?? null,
         goal_ids: opening.goalIds ?? [],
       })),
     });

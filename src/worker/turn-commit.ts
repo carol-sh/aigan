@@ -73,6 +73,7 @@ function openFlowFor(ctx: HarnessContext, turn: DecidedTurn): number {
     opener: opening ? "ai" : "user",
     openedByReservationId: opening?.id ?? null,
     openedIntent: opening?.intent ?? null,
+    openedJobId: opening?.job_id ?? null,
     planDate: turn.planDate,
     startedAt: ctx.clock.now(),
   });
