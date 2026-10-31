@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/main.ts serve",
     "reset": "node --disable-warning=ExperimentalWarning src/main.ts reset",
+    "wipe": "node --disable-warning=ExperimentalWarning src/main.ts wipe",
     "memory": "node --disable-warning=ExperimentalWarning src/main.ts memory",
     "typecheck": "tsc --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test 'test/**/*.test.ts'",

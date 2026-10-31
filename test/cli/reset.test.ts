@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openDatabase } from "../../src/db/open.ts";
@@ -62,4 +62,50 @@ test("reset은 DB가 없으면 되돌릴 것이 없다고 한다", async (t) => 
   const result = await runCli(["reset"], { dataDir });
 
   assert.deepEqual(result, { code: 0, stdout: "되돌릴 DB가 없다\n", stderr: "" });
+});
+
+test("wipe는 wipe를 입력하면 DB를 백업 없이 지우고 설정·프롬프트·backup은 둔다", async (t) => {
+  const dataDir = makeDataDirWithDatabase(t);
+  mkdirSync(join(dataDir, "backup", "20261030-090000"), { recursive: true });
+  writeFileSync(join(dataDir, "backup", "20261030-090000", "aigan.db"), "");
+
+  const result = await runCli(["wipe"], { dataDir, input: "wipe\n" });
+
+  assert.equal(result.code, 0, result.stderr);
+  for (const file of ["aigan.db", "aigan.db-wal", "aigan.db-shm", "aigan.lock"]) {
+    assert.ok(!existsSync(join(dataDir, file)), file);
+  }
+  assert.deepEqual(backups(dataDir), ["20261030-090000/aigan.db"]);
+  assert.ok(existsSync(join(dataDir, "config")));
+  assert.ok(existsSync(join(dataDir, "prompts", "turn-rules.md")));
+  assert.match(result.stdout, /지웠다\n$/);
+});
+
+test("wipe는 확인 입력이 다르면 아무것도 지우지 않는다", async (t) => {
+  const dataDir = makeDataDirWithDatabase(t);
+
+  const result = await runCli(["wipe"], { dataDir, input: "reset\n" });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /취소했다/);
+  assert.ok(existsSync(join(dataDir, "aigan.db")));
+});
+
+test("wipe는 서버가 잠금을 잡고 있으면 거부한다", async (t) => {
+  const dataDir = makeDataDirWithDatabase(t);
+  writeFileSync(join(dataDir, "aigan.lock"), String(process.pid));
+
+  const result = await runCli(["wipe"], { dataDir, input: "wipe\n" });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /서버가 돌고 있다/);
+  assert.ok(existsSync(join(dataDir, "aigan.db")));
+});
+
+test("wipe는 DB가 없으면 지울 것이 없다고 한다", async (t) => {
+  const dataDir = makeDataDir(t);
+
+  const result = await runCli(["wipe"], { dataDir });
+
+  assert.deepEqual(result, { code: 0, stdout: "지울 DB가 없다\n", stderr: "" });
 });

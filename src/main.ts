@@ -1,14 +1,14 @@
-// 진입점. serve / reset / memory (docs/harness-design.md §9.10)
+// 진입점. serve / reset / wipe / memory (docs/harness-design.md §9.10)
 import { createInterface } from "node:readline";
 import { runMemory } from "./cli/memory.ts";
-import { runReset } from "./cli/reset.ts";
+import { runReset, runWipe } from "./cli/reset.ts";
 import { runServe } from "./cli/serve.ts";
 
-const USAGE = "사용법: DATA_DIR=<데이터 폴더> aigan <serve|reset|memory>\n";
+const USAGE = "사용법: DATA_DIR=<데이터 폴더> aigan <serve|reset|wipe|memory>\n";
 
 async function main(args: string[]): Promise<number> {
   const [command] = args;
-  if (command !== "serve" && command !== "reset" && command !== "memory") {
+  if (command !== "serve" && command !== "reset" && command !== "wipe" && command !== "memory") {
     process.stderr.write(USAGE);
     return 2;
   }
@@ -22,6 +22,8 @@ async function main(args: string[]): Promise<number> {
       return runServe(dataDir);
     case "reset":
       return runReset(dataDir, readLineFromStdin);
+    case "wipe":
+      return runWipe(dataDir, readLineFromStdin);
     case "memory":
       return runMemory(dataDir);
   }
