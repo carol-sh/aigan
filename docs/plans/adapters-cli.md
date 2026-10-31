@@ -287,6 +287,7 @@ DATA_DIR/
 | `DATA_DIR=<경로> pnpm start` | 서버(`serve`). Ctrl-C나 SIGTERM으로 끈다 |
 | `DATA_DIR=<경로> pnpm memory` | 기억을 출력한다. 서버가 돌아도 된다 |
 | `DATA_DIR=<경로> pnpm reset` | 서버를 끈 뒤에만. `reset`을 입력하면 DB를 `backup/<시각>/`으로 옮긴다 |
+| `DATA_DIR=<경로> pnpm wipe` | 서버를 끈 뒤에만. `wipe`를 입력하면 DB를 백업 없이 지운다. 스키마가 바뀌어 옛 DB를 버릴 때 |
 
 - 종료 코드: 0 정상, 1 실패(설정 오류, 잠금, 취소), 2 사용법 오류.
 - 로그: info는 stdout, warn·error는 stderr. 각 줄은 UTC ISO 시각으로 시작한다.

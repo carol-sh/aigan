@@ -106,6 +106,9 @@
   ```
   ## 방침
   - sample: <description>
+  ## 이번 흐름 방침
+  sample: <description>                     (이 흐름을 연 예약의 job_id. 본문은 2칸 들여쓰기. 없으면 "(없음)". 아래 "이번 흐름 방침")
+    <본문>
   ## 기억
   <state 전문>                              (비었으면 "state: (비어 있음)")
   칸: 가이드 원고, 조사 데이터, 도구로서의 사용자   (없으면 "칸: (없음)")
@@ -525,6 +528,10 @@ docs/plans/llm-executor.md          # 이 계획. docs/README.md에서 링크
 - §5.3: 정리 입력에 persona와 방침 사본은 없다. 목표 필드는 정본 목록과 같다.
 - 정본과 다르게 정한 것: 되묻기의 도구 라운드 상한을 새로 센다. 정본은 이 점을 정하지 않았다. 계획 문서에 적는다.
 
+## 이번 흐름 방침 (나중에 더함)
+
+AI 개시 턴의 첫 지시가 방침 본문 대신 `description` 한 줄만 보고 나가는 문제가 실물에서 나왔다. 개시 예약에 `job_id`를 달고(계획 출력은 필수 키, `open_reserve`·`open_update`는 선택), 그 예약이 연 흐름의 모든 턴이 `## 방침` 바로 뒤의 `## 이번 흐름 방침`에서 그 방침의 설명과 들여쓴 본문을 본다. 흐름 안에서 같은 글이라 prefix 캐시가 산다. 개시 예약 줄에는 `[방침 <id>]`가 붙는다. 정본 §5.1, 테스트 32a–32c(`test/spec/11.04a-opening-job.test.ts`).
+
 ## 프롬프트 작성용 계약
 
 `turn-rules.md`·`cleanup-rules.md`를 쓸 때 기준이다. 입력 절과 형식은 위 "입력 배치"와 "정리 입력"이 정본이고, 여기에는 나머지를 모은다.
@@ -553,8 +560,8 @@ docs/plans/llm-executor.md          # 이 계획. docs/README.md에서 링크
 | `goal_create` | `job_id`, `title`, `done_criteria`, `due_at?` | `goal_id` |
 | `goal_update` | `goal_id`, `progress?`, `due_at?` | |
 | `goal_close` | `goal_id`, `result`(`done`·`failed`·`dropped`), `reason` | |
-| `open_reserve` | `at`, `intent`, `goal_ids?` | `reservation_id`, 보정된 `at` |
-| `open_update` | `reservation_id`, `at?`, `intent?`, `goal_ids?` | |
+| `open_reserve` | `at`, `intent`, `job_id?`, `goal_ids?` | `reservation_id`, 보정된 `at` |
+| `open_update` | `reservation_id`, `at?`, `intent?`, `job_id?`(`null`이면 뗀다), `goal_ids?` | |
 | `open_cancel` | `reservation_id` | |
 
 **정리 도구**: `memory_read`(`title`), `state_write`(`content`), `memory_write`(`title`, `content`), `memory_delete`(`title`).

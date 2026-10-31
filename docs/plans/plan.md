@@ -269,10 +269,11 @@ docs/plans/plan.md                  # 이 계획 + 구현 결과 + 프롬프트 
 
 ```json
 { "body": "하루 구상(자연어)",
-  "openings": [{ "at": "2026-10-30 12:30", "intent": "점심 뒤 산책 권하기", "goal_ids": [1] }] }
+  "openings": [{ "at": "2026-10-30 12:30", "intent": "점심 뒤 산책 권하기", "job_id": "sample", "goal_ids": [1] }] }
 ```
 
 - `body`는 비면 안 된다. `openings`는 빈 배열이어도 된다. `goal_ids`는 빼도 된다.
+- `job_id`는 키가 필수다. 값은 방침 id 또는 `null`이다. 그 예약이 연 흐름의 턴이 방침 본문을 본다([`llm-executor.md`](llm-executor.md) "이번 흐름 방침"). 목록에 없는 id는 비우고 예약은 넣는다(로그: `계획 예약에서 없는 방침을 뺐다(<id>): …`).
 - `at`은 설정 시간대의 로컬 `YYYY-MM-DD HH:mm`이다. 초를 붙여도 받는다.
 - 하네스가 고치는 것(로그에 남는다):
   - 그날 끝 이후는 버린다.
