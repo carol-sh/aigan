@@ -10,7 +10,8 @@ export interface Flow {
   opener: "ai" | "user";
   opened_by_reservation_id: number | null;
   opened_intent: string | null;
-  opened_job_id: string | null;
+  /** 이 흐름이 하는 방침. 개시 예약이 정하거나, 비어 있으면 흐름에서 처음 만든 목표가 정한다. */
+  job_id: string | null;
   plan_date: PlanDate;
   turn_count: number;
   answered_upto_id: number;
@@ -28,7 +29,7 @@ export interface NewFlow {
   opener: Flow["opener"];
   openedByReservationId: number | null;
   openedIntent: string | null;
-  openedJobId: string | null;
+  jobId: string | null;
   planDate: PlanDate;
   startedAt: DateTime;
 }
@@ -72,18 +73,25 @@ export class FlowRepository {
   open(flow: NewFlow): number {
     const result = this.#db
       .prepare(
-        `INSERT INTO flows (opener, opened_by_reservation_id, opened_intent, opened_job_id, plan_date, started_at)
+        `INSERT INTO flows (opener, opened_by_reservation_id, opened_intent, job_id, plan_date, started_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         flow.opener,
         flow.openedByReservationId,
         flow.openedIntent,
-        flow.openedJobId,
+        flow.jobId,
         flow.planDate,
         toDbTime(flow.startedAt),
       );
     return Number(result.lastInsertRowid);
+  }
+
+  /** 이미 정해진 방침은 바꾸지 않는다. 바뀌면 턴 입력의 앞부분이 달라져 prefix 캐시가 깨진다. */
+  settleJobIfUnset(flowId: number, jobId: string): void {
+    this.#db
+      .prepare("UPDATE flows SET job_id = ? WHERE id = ? AND job_id IS NULL")
+      .run(jobId, flowId);
   }
 
   recordTurn(flowId: number, answeredUptoId: number): void {

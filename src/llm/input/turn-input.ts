@@ -31,8 +31,11 @@ export interface TurnInput {
   now: DateTime;
   endOfDay: DateTime;
   jobs: JobPolicy[];
-  /** 이 흐름을 연 개시 예약의 방침. 모델이 `job_read`를 건너뛰어도 첫 지시가 본문을 따르게 한다. */
-  openedJob: JobPolicy | undefined;
+  /**
+   * 이 흐름의 방침. 없으면 모든 방침 본문을 보인다. 모델이 `job_read`를 건너뛰어도 지시가 설명 한 줄이
+   * 아니라 본문을 따르게 한다.
+   */
+  flowJob: JobPolicy | undefined;
   memory: MemoryView;
   planBody: string | undefined;
   previousFlowTail: { endedAt: DateTime; messages: Message[] } | undefined;
@@ -69,8 +72,8 @@ export function assembleTurnInput(
     now,
     endOfDay: ctx.calendar.endOfDay(planDate),
     jobs: ctx.prompts.jobPolicies,
-    openedJob: ctx.prompts.jobPolicies.find(
-      (job) => job.id === (consumedOpening ? consumedOpening.job_id : flow?.opened_job_id),
+    flowJob: ctx.prompts.jobPolicies.find(
+      (job) => job.id === (consumedOpening ? consumedOpening.job_id : flow?.job_id),
     ),
     memory: viewMemory(ctx.memory, (title) => ctx.config.turn_memory_sections.includes(title)),
     planBody: ctx.plans.findBody(planDate),
@@ -154,7 +157,7 @@ export function renderTurnInput(
       "방침",
       input.jobs.map((job) => `- ${job.id}: ${job.description}`),
     ),
-    renderSection("이번 흐름 방침", renderOpenedJob(input.openedJob)),
+    renderSection("이번 흐름 방침", renderFlowJobs(input.flowJob, input.jobs)),
     renderSection("기억", renderMemory(input.memory)),
     renderSection("오늘 계획", [input.planBody ?? "(계획 전)"]),
     renderSection("직전 흐름", renderPreviousFlowTail(input.previousFlowTail, view)),
@@ -178,8 +181,15 @@ export function renderTurnInput(
   ];
 }
 
-function renderOpenedJob(job: JobPolicy | undefined): string[] {
-  if (job === undefined) return [];
+/** 방침이 정해지기 전까지는 흐름 안에서 같은 글이라 prefix 캐시가 산다. 정해지는 순간 한 번 바뀐다. */
+function renderFlowJobs(flowJob: JobPolicy | undefined, jobs: JobPolicy[]): string[] {
+  if (flowJob !== undefined) return renderJob(flowJob);
+  return [UNSETTLED_FLOW_JOB, ...jobs.flatMap(renderJob)];
+}
+
+const UNSETTLED_FLOW_JOB = "(이 흐름의 방침이 아직 없다. 목표를 만들면 그 방침으로 정해진다)";
+
+function renderJob(job: JobPolicy): string[] {
   return [`${job.id}: ${job.description}`, ...indentLines(job.prompt)];
 }
 

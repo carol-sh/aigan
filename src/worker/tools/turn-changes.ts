@@ -93,6 +93,12 @@ export class TurnChanges {
     return this.#changes.length > 0;
   }
 
+  /** 흐름의 방침이 비어 있으면 이 방침으로 정한다. */
+  get firstCreatedGoalJobId(): string | undefined {
+    const created = this.#changes.find((change) => change.kind === "createGoal");
+    return created?.kind === "createGoal" ? created.goal.jobId : undefined;
+  }
+
   get activeGoalCount(): number {
     return this.#activeGoals.size;
   }

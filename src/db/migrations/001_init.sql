@@ -38,7 +38,7 @@ CREATE TABLE flows (
   opener TEXT NOT NULL CHECK (opener IN ('ai', 'user')),
   opened_by_reservation_id INTEGER,
   opened_intent TEXT,
-  opened_job_id TEXT,
+  job_id TEXT,
   plan_date TEXT NOT NULL,
   turn_count INTEGER NOT NULL DEFAULT 0,
   answered_upto_id INTEGER NOT NULL DEFAULT 0,

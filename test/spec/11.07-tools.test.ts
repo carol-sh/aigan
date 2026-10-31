@@ -484,7 +484,7 @@ async function secondTurnInput(t: TestContext, firstTurn: (turn: ScriptedTurn) =
   return { app, firstInput: app.llm.inputs("turn")[0]!, secondInput: app.llm.lastInput("turn") };
 }
 
-test("51, 51a: 방침은 id와 설명 목록만 보이고, 본문은 만든 목표의 방침 사본으로만 들어간다", async (t) => {
+test("51, 51a: 방침 절은 id와 설명 목록이고, 본문은 이번 흐름 방침과 만든 목표의 방침 사본으로 들어간다", async (t) => {
   const jobBody = "<!-- 방침 본문. docs/harness-design.md §2.1 -->";
   const { firstInput, secondInput } = await secondTurnInput(t, (turn) =>
     turn.createGoal({ title: "물", dueAt: "18:00" }),
@@ -493,7 +493,8 @@ test("51, 51a: 방침은 id와 설명 목록만 보이고, 본문은 만든 목�
   assert.deepEqual(inputSection(firstInput, "방침"), [
     "- sample: 한 줄 설명. 계획과 턴의 방침 목록에 이 줄이 보인다",
   ]);
-  assert.ok(!firstInput.includes(jobBody));
+  assert.equal(firstInput.split(jobBody).length - 1, 1);
+  assert.ok(inputSection(firstInput, "이번 흐름 방침").includes(`  ${jobBody}`));
   assert.deepEqual(inputSection(secondInput, "지금 활성 목표"), [
     "- #1 물 (sample, 마감 2026-10-30 18:00)",
     "  완료 조건: 물 끝",

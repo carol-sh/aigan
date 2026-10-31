@@ -221,10 +221,13 @@ test("답장 턴과 이어가기 턴은 계기가 다르고, 사용자가 연 �
 });
 
 test("같은 흐름의 다음 턴 입력은 도구가 예약을 바꿔도 흐름 대화 끝까지 앞 턴 입력과 글자가 같다", async (t) => {
+  // 목표는 첫 턴에 만든다. 목표를 처음 만드는 턴은 흐름의 방침을 정해 그 절이 한 번 바뀐다.
   const llm = new ScriptedLlm().onTurn(
-    (turn) => turn.say("응", { continueAfter: { hours: 1 } }),
     async (turn) => {
       await turn.createGoal({ title: "물" });
+      return turn.say("응", { continueAfter: { hours: 1 } });
+    },
+    async (turn) => {
       await turn.reserveOpening({ at: "15:00", intent: "물 확인", goalIds: [1] });
       return turn.say("3시에 볼게", { continueAfter: { hours: 1 } });
     },

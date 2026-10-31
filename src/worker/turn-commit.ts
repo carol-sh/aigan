@@ -38,6 +38,8 @@ export function commitTurn(ctx: HarnessContext, turn: DecidedTurn): void {
     if (!isSilent) {
       ctx.messages.markBusy(turn.busyMessageIds);
       turn.changes.applyTo(ctx, flowId);
+      const createdJobId = turn.changes.firstCreatedGoalJobId;
+      if (createdJobId !== undefined) ctx.flows.settleJobIfUnset(flowId, createdJobId);
       queueMessages(ctx, flowId, output.messages);
     }
     ctx.flows.recordTurn(flowId, turn.lastSeenUserMessageId);
@@ -73,7 +75,7 @@ function openFlowFor(ctx: HarnessContext, turn: DecidedTurn): number {
     opener: opening ? "ai" : "user",
     openedByReservationId: opening?.id ?? null,
     openedIntent: opening?.intent ?? null,
-    openedJobId: opening?.job_id ?? null,
+    jobId: opening?.job_id ?? null,
     planDate: turn.planDate,
     startedAt: ctx.clock.now(),
   });
