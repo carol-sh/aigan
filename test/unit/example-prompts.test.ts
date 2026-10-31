@@ -54,9 +54,9 @@ test("예시 프롬프트 세트는 그대로 로드되고 선택 파일까지 �
   assert.ok(prompts.compactRules);
   assert.deepEqual(
     prompts.jobPolicies.map((job) => job.id),
-    ["algorithm-notes"],
+    ["notice", "random", "surveillance"],
   );
-  assert.match(prompts.jobPolicies[0]!.description, /평일 저녁/);
+  assert.match(prompts.jobPolicies[0]!.description, /통보한다/);
 });
 
 test("턴 규칙은 턴 도구 전부와 출력 필드, 계기 네 가지, 되묻기 문구를 말한다", () => {
@@ -117,7 +117,7 @@ test("예시 세트로 부팅하면 계획·턴·정리 요청의 system이 그 
       plan.finishPlan({ openings: [{ at: "10:30", intent: "알고리즘 노트: 문제 가져오게 하기" }] }),
     )
     .onTurn(async (turn) => {
-      await turn.use("job_read", { job_id: "algorithm-notes" });
+      await turn.use("job_read", { job_id: "notice" });
       return turn.end("노트북 켜. 9시에 문제 하나.");
     })
     .onCleanup(async (cleanup) => {
@@ -132,8 +132,9 @@ test("예시 세트로 부팅하면 계획·턴·정리 요청의 system이 그 
   assert.equal(systemOf("plan"), prompts.planRules);
   assert.equal(systemOf("turn"), `${prompts.persona}\n\n${prompts.turnRules}`);
   assert.equal(systemOf("cleanup"), prompts.cleanupRules);
-  assert.deepEqual(inputSection(llm.lastInput("turn"), "방침"), [
-    `- algorithm-notes: ${prompts.jobPolicies[0]!.description}`,
-  ]);
+  assert.deepEqual(
+    inputSection(llm.lastInput("turn"), "방침"),
+    prompts.jobPolicies.map((job) => `- ${job.id}: ${job.description}`),
+  );
   assert.equal(app.row("SELECT content FROM memory_state")?.content, "알고리즘 노트 0문제");
 });
