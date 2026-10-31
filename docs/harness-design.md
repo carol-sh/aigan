@@ -250,7 +250,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | 항목 | 내용 |
 |---|---|
 | 계기 | 개시(AI·사용자), 이어가기, 흐름 내 사용자 메시지 |
-| 입력 | 턴 규칙 프롬프트, 방침 목록(`id`·`description`), 이번 흐름 방침(이 흐름을 연 개시 예약의 `job_id`가 가리키는 방침의 `description`과 본문), 활성 목표(진행 메모, `job_snapshot`, 그 목표에 걸린 개시 예약 id), 개시 예약 전체(`scheduled`·`fired`, `at` 순. id·`at`·`intent`·`goal_ids`·`job_id`·`source`, `fired`는 "밀림" 표시. AI 개시 턴의 `x`는 뺀다), 오늘 종료된 목표(결과·사유), 오늘 계획(아직 없으면 "(계획 전)"), 직전 흐름 꼬리, 흐름 대화, 직전 흐름 이후 흐름 밖 메시지(최근 `outside_messages_max`개), 이벤트 블록(계기·이 흐름을 연 개시 예약의 `intent`(AI 개시 턴이면 예정 시각 `at`도)·현재 시각·오늘의 끝), 기억(state 전문, 칸 제목 목록, `turn_memory_sections`에 적은 칸은 본문까지) |
+| 입력 | 턴 규칙 프롬프트, 방침 목록(`id`·`description`), 이번 흐름 방침(흐름의 `job_id`가 가리키는 방침의 `description`과 본문. 정해지지 않았으면 모든 방침), 활성 목표(진행 메모, `job_snapshot`, 그 목표에 걸린 개시 예약 id), 개시 예약 전체(`scheduled`·`fired`, `at` 순. id·`at`·`intent`·`goal_ids`·`job_id`·`source`, `fired`는 "밀림" 표시. AI 개시 턴의 `x`는 뺀다), 오늘 종료된 목표(결과·사유), 오늘 계획(아직 없으면 "(계획 전)"), 직전 흐름 꼬리, 흐름 대화, 직전 흐름 이후 흐름 밖 메시지(최근 `outside_messages_max`개), 이벤트 블록(계기·이 흐름을 연 개시 예약의 `intent`(AI 개시 턴이면 예정 시각 `at`도)·현재 시각·오늘의 끝), 기억(state 전문, 칸 제목 목록, `turn_memory_sections`에 적은 칸은 본문까지) |
 | 출력 | 보낼 메시지(0개 이상), 다음(`continue at` \| `end`) |
 | 도구 | `job_read`(id), `memory_read`(title), `goal_create`, `goal_update`(진행 메모·마감), `goal_close`(done/failed/dropped + 사유), `open_reserve`(at, intent, goal_ids), `open_update`(id, at?, intent?, goal_ids?), `open_cancel`(id) |
 
@@ -259,7 +259,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 - **직전 흐름 꼬리**: 가장 최근에 닫힌 흐름의 종료 시각이 `기준 시각 - prev_flow_tail_max_age_sec`보다 뒤면, 그 흐름의 마지막 `prev_flow_tail_messages`개 메시지. 종료가 기준 시각보다 뒤여도 넣는다. 흐름이 닫히며 밖으로 옮긴 미응답(블랙아웃 시작 직전에 온 말, `stale`·`failed` 종료, 지우기 실패)은 그 흐름이 닫히기 전에 온 것이라 기준 시각이 종료보다 앞서는데, 바로 이 메시지가 꼬리가 가장 필요한 경우다. 기준 시각은 이 흐름의 첫 메시지 시각이고, 흐름이 없으면 흐름 밖 메시지 중 가장 이른 것, 그것도 없으면 지금이다. 닫히는 메시지에 대한 답("응 근데 하나만")이 흐름 밖으로 옮겨져 판정될 때, 그리고 방금 닫힌 대화를 이어 말할 때 무엇에 대한 말인지 알게 한다. 처리 시각이 아니라 메시지 시각으로 재는 이유: 블랙아웃 직전에 닫힌 흐름에 대한 답(22:58 "내일 첫 할 일 정해" → 23:06 "운동")은 블랙아웃이 끝난 아침에 처리된다. 흐름을 연 메시지가 그 답이면 그 흐름의 이후 턴도 같은 꼬리를 본다. 앞서 닫힌 흐름이 오래전(전날 저녁 흐름에 대한 아침의 새 말)이면 시간 제한으로 빠진다.
 - 흐름 대화의 assistant 줄은 보낸 메시지 본문이다. 출력 JSON(`next`, `continue at`)은 다시 넣지 않는다. 모델이 자기 `next`를 되풀이하거나 대화와 출력 형식을 헷갈리지 않게 하기 위해서다.
 - 이 흐름을 연 개시 예약의 `intent`(`opened_intent`)는 첫 턴만이 아니라 그 흐름의 모든 턴에 넣는다.
-- **이번 흐름 방침**: 이 흐름을 연 개시 예약에 `job_id`가 있으면 그 방침의 본문을 그 흐름의 모든 턴에 넣는다(`opened_job_id`). 계획은 방침 목록만 보고 개시 의도를 쓰고 모델은 `job_read`를 건너뛸 수 있어서, 이게 없으면 첫 지시가 `description` 한 줄만 따른다. 본문은 흐름당 하나뿐이라 방침이 늘어도 입력이 그만큼 커지지 않는다(§2.1). 사용자가 연 흐름과 방침 없는 예약이 연 흐름은 `(없음)`이다.
+- **이번 흐름 방침**: 흐름의 방침(`flows.job_id`)이 있으면 그 방침의 본문을 그 흐름의 모든 턴에 넣는다. 방침은 흐름을 연 개시 예약의 `job_id`가 정하고, 비어 있으면 그 흐름에서 처음 `goal_create`한 턴의 커밋이 그 목표의 방침으로 정한다(흐름을 여는 커밋도 같다). 한 번 정해지면 바꾸지 않는다. 정해지지 않은 동안(판정 턴, 사용자가 연 흐름, 방침 없는 예약이 연 흐름)은 "아직 없다"는 줄 아래에 모든 방침의 본문을 넣는다. 계획은 방침 목록만 보고 개시 의도를 쓰고 모델은 `job_read`를 건너뛸 수 있어서, 이게 없으면 지시가 `description` 한 줄만 따른다. 실물에서 인사로 연 흐름이 그랬다. 흐름 안에서는 정해지기 전까지, 그리고 정해진 뒤 같은 글이라 prefix 캐시가 산다(정해지는 턴에서 한 번 바뀐다).
 - AI 개시 턴에는 그 예약의 예정 시각(`at`)과 늦어진 정도("09:00 예정, 5시간 늦음")도 넣는다. 다른 흐름이 길어지거나 보류·재시작으로 늦게 발화한 개입을 AI가 알아보고 말을 고르게 하기 위해서다. 예약 행은 개시 턴의 pre에서 아직 남아 있으므로 컬럼을 따로 두지 않는다. 이후 턴은 흐름 대화에 첫 메시지가 있으니 필요 없다.
 - 이 턴으로 흐름이 없어지는데(`end`, 또는 개시 턴의 메시지 0개) 다음 확인이 없는 활성 목표가 남으면, 하네스가 그 목표를 알려 주고 한 번 되묻는다(§9.4). AI는 `open_reserve`로 시각을 잡거나, `open_update`로 기존 예약에 붙이거나, `goal_close`한다.
 - 메시지 0개면 도구 효과를 버린다(원칙 6).
@@ -528,7 +528,7 @@ test/
 | `opener` | TEXT | `ai` / `user` |
 | `opened_by_reservation_id` | INTEGER / NULL | 기록용. 예약 행은 개시 때 지워진다 |
 | `opened_intent` | TEXT / NULL | 개시 예약의 `intent` 복사. 그 흐름의 모든 턴 이벤트 블록에 들어간다 |
-| `opened_job_id` | TEXT / NULL | 개시 예약의 `job_id` 복사. 그 흐름의 모든 턴에 방침 본문이 들어간다(§5.1) |
+| `job_id` | TEXT / NULL | 흐름의 방침. 개시 예약의 `job_id` 복사, 비어 있으면 그 흐름에서 처음 만든 목표의 방침. 한 번 정해지면 바꾸지 않는다(§5.1) |
 | `plan_date` | TEXT | 열린 시점의 현재 계획일. 이어가기 클램프의 그날 끝, 턴 입력의 "오늘" 기준(§5.1) |
 | `turn_count` | INTEGER | |
 | `answered_upto_id` | INTEGER | 마지막 커밋 턴이 컨텍스트에 넣은 user 메시지의 최대 id |
@@ -738,6 +738,7 @@ run Turn(kind, x):
     if not silent:
       gone → void_reason='busy'
       도구 효과 반영(§9.5), flow_goals 기록
+      f.job_id가 비어 있고 이 턴이 goal_create했으면 f.job_id = 첫 목표의 job_id
       assistant 메시지 삽입(sent_at=NULL)
     f.answered_upto_id = MAX(f.answered_upto_id, upto); f.turn_count++   # 뒤로 가지 않는다
     failure_count=0; output_fail_count=0; output_fail_key=NULL; turn_retry_at=NULL
@@ -798,7 +799,7 @@ TurnTx는 도구 효과를 모으고, 이후 도구 라운드는 그 효과가 �
 | `goal_create` | 방침 id 없음, 활성 목표 ≥ `goal_max_active`, `due_at`이 현재 계획일의 깨어 있는 구간 밖 | `active`, `job_snapshot` 복사, `progress`(선택, 단계 계획), `plan_date`=현재 계획일. 결과에 방침 본문(`job_prompt`)을 돌려줘 모델이 `job_read` 없이도 지시 전에 기준을 본다 |
 | `goal_update` | 활성 목표가 아님, `due_at`이 그 목표 계획일의 깨어 있는 구간 밖 | `progress`·`due_at` 갱신 |
 | `goal_close` | 활성 목표가 아님 | `state`, `end_reason`, `closed_at`. 걸린 예약은 건드리지 않는다(사전 검사가 지운다) |
-| `open_reserve` | 없는 `job_id`, `goal_ids`에 활성이 아니거나 지난 계획일의 것, I6 상한, `at`이 그날 끝 이후, 그날 남은 시간 없음 | `kind='open'`, `source='turn'`, `plan_date`=현재 계획일, 앞쪽 클램프(§2.4) |
+| `open_reserve` | 없는 `job_id`, 같은 `job_id`이거나 `goal_ids`가 겹치는 `open` 예약이 고친 `at`의 60분 안에 있음(`harness` 출처 제외, 이번 턴에 만든 것 포함. 사유에 그 예약 id를 담아 `open_update`로 고치게 한다), `goal_ids`에 활성이 아니거나 지난 계획일의 것, I6 상한, `at`이 그날 끝 이후, 그날 남은 시간 없음 | `kind='open'`, `source='turn'`, `plan_date`=현재 계획일, 앞쪽 클램프(§2.4) |
 | `open_update` | `open` 예약이 아님, 바꿀 필드 없음, 없는 `job_id`(`null`은 방침을 뗀다). `goal_ids`를 주면 `open_reserve`와 같은 목표 조건. `at`을 주면 그날 끝 이후, 그날 남은 시간 없음 | 준 필드만 바꾼다. `goal_ids`는 통째 교체. `at`은 앞쪽 클램프(§2.4)를 거치고, `fired` 예약이면 `scheduled`로 돌아간다(밀린 개입 미루기). `source`·`plan_date`는 그대로, I6 집계도 그대로. `harness` 출처도 가능 |
 | `open_cancel` | `open` 예약이 아님 | 삭제(`harness` 출처도 가능) |
 | `memory_read` | 없는 칸 | 본문을 돌려준다. 턴·계획·정리 공용, 상태를 바꾸지 않는다 |
@@ -1063,7 +1064,9 @@ out = await llm(ctx)
 | 30a | `at` 09:00 개시 예약이 다른 흐름 때문에 14:00에 개시 턴 | 이벤트 블록에 "09:00 예정, 5시간 늦음". 이후 턴에는 없음 |
 | 31 | 개시 턴 io 중 도착한 메시지, 지우기 실패 | 커밋 tx가 흡수. `id > upto`라 미응답 → 디바운스 뒤 `Turn(reply)` |
 | 32 | 흐름이 닫힌 직후 다른 개시 예약이 `fired` | 최소 간격 없이 정리 뒤 바로 개시 |
-| 32a | `job_id`가 있는 개시 예약이 연 흐름 | 개시 턴과 이후 턴 모두 이번 흐름 방침에 같은 본문, `opened_job_id` 저장. 사용자 흐름·방침 없는 예약은 `(없음)` |
+| 32a | `job_id`가 있는 개시 예약이 연 흐름 | 개시 턴과 이후 턴 모두 이번 흐름 방침에 같은 본문, `flows.job_id` 저장 |
+| 32d | 방침이 정해지지 않은 흐름(판정 턴, 사용자 흐름, 방침 없는 예약) | 이번 흐름 방침에 안내 줄과 모든 방침 본문, 턴마다 같은 글. 처음 `goal_create`한 턴의 커밋이 그 방침으로 정하고 이후 바뀌지 않음 |
+| 32e | `open_reserve`가 같은 방침·겹치는 목표의 예약 60분 안 | 거부, 사유에 그 예약 id와 `open_update`. 보정 예약은 비교 안 함 |
 | 32b | 계획이 없는 `job_id` / `job_id` 키 누락 | 예약은 저장하고 방침만 비움(로그) / 형식 위반 재시도 |
 | 32c | `open_reserve`·`open_update`의 `job_id` | 저장·교체·`null`로 떼기. 없는 id는 거부(있는 방침 목록) |
 
