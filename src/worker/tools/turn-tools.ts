@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { PlanDate } from "../../time.ts";
 import type { HarnessContext } from "../context.ts";
 import { fitOpeningTime, formatLocalTime, parseLocalTime } from "../reservation-times.ts";
-import type { TurnChanges } from "./turn-changes.ts";
+import type { TurnChanges, WorkingOpening } from "./turn-changes.ts";
 import { type ToolResult, ToolBox, defineTool, rejected } from "./tool-box.ts";
 import { memoryReadTool } from "./memory-read.ts";
 
@@ -121,6 +121,13 @@ export function createTurnTools(scope: TurnToolScope): ToolBox {
         }
         const at = fitRequestedOpeningTime(scope, args.at);
         if (at instanceof Rejection) return at.result;
+        const duplicate = findDuplicateOpening(scope, at, args.job_id, args.goal_ids);
+        if (duplicate) {
+          const jobTag = duplicate.jobId ? ` [방침 ${duplicate.jobId}]` : "";
+          return rejected(
+            `개시 예약 #${duplicate.id}(${formatLocalTime(duplicate.at, ctx.config.timezone)}${jobTag})이 1시간 안에 있다. 새로 만들지 말고 open_update로 고쳐라`,
+          );
+        }
         const reservationId = changes.scheduleOpening({
           at,
           intent: args.intent,
@@ -195,6 +202,29 @@ class Rejection {
 
 function findJob({ ctx }: TurnToolScope, jobId: string) {
   return ctx.prompts.jobPolicies.find((job) => job.id === jobId);
+}
+
+/**
+ * 계획 예약과 같은 일을 턴이 또 잡으면 같은 개입이 두 번 열린다. 비추론 모델은 "기존 예약을 고쳐라"를
+ * 자주 놓쳐서 도구가 막는다. 창은 계획 규칙의 "개입 사이 최소 1시간"과 같다. 보정 예약은 나중 예약이
+ * 생기면 할 일이 사라지므로 비교하지 않는다.
+ */
+const DUPLICATE_OPENING_WINDOW_MINUTES = 60;
+
+function findDuplicateOpening(
+  { changes }: TurnToolScope,
+  at: DateTime,
+  jobId: string | undefined,
+  goalIds: number[],
+): WorkingOpening | undefined {
+  return changes.listOpenings().find((opening) => {
+    if (opening.source === "harness") return false;
+    const gapMinutes = Math.abs(opening.at.diff(at).as("minutes"));
+    if (gapMinutes >= DUPLICATE_OPENING_WINDOW_MINUTES) return false;
+    const isSameJob = jobId !== undefined && opening.jobId === jobId;
+    const sharesGoal = goalIds.some((goalId) => opening.goalIds.includes(goalId));
+    return isSameJob || sharesGoal;
+  });
 }
 
 function rejectUnknownJob(scope: TurnToolScope, jobId: string): ToolResult | undefined {

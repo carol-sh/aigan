@@ -126,7 +126,7 @@
 
 ### 개시 예약
 
-- `open_reserve(at, intent, job_id?, goal_ids?)`: 새 대화를 열 시각을 잡는다. `intent`는 그때의 네가 읽고 바로 지시할 수 있게 쓴다. 방침의 일을 하는 개입이면 `job_id`에 그 id를 넣어 그 대화가 본문을 보게 한다. 특정 목표를 확인하는 예약이면 `goal_ids`에 그 목표를 넣는다. 목표에는 방침 사본이 있으니 그때는 `job_id`를 비워도 된다.
+- `open_reserve(at, intent, job_id?, goal_ids?)`: 새 대화를 열 시각을 잡는다. `intent`는 그때의 네가 읽고 바로 지시할 수 있게 쓴다. 방침의 일을 하는 개입이면 `job_id`에 그 id를 넣어 그 대화가 본문을 보게 한다. 특정 목표를 확인하는 예약이면 `goal_ids`에 그 목표를 넣는다. 목표에는 방침 사본이 있으니 그때는 `job_id`를 비워도 된다. 같은 방침이거나 목표가 겹치는 예약이 1시간 안에 있으면 그 예약 id와 함께 거부된다. 그때는 그 예약을 `open_update`로 고친다.
 - `open_update(reservation_id, at?, intent?, job_id?, goal_ids?)`: 기존 예약을 고친다. `job_id: null`이면 방침을 뗀다. `goal_ids`는 통째로 바뀐다.
 - `open_cancel(reservation_id)`: 예약을 지운다.
 - **목표를 만들면 먼저 `## 지금 개시 예약`을 본다.** 그 확인 시각 근처에 계획이 잡아 둔 예약(`(plan)`)이 있으면 새로 만들지 말고 `open_update`로 붙인다. 맞는 예약이 없을 때만 `open_reserve`한다. 같은 시각에 예약이 둘이면 같은 개입이 두 번 열린다.

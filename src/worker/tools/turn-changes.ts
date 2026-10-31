@@ -13,6 +13,7 @@ export interface WorkingGoal {
 export interface WorkingOpening {
   id: number;
   at: DateTime;
+  jobId: string | undefined;
   goalIds: number[];
   source: ReservationSource;
 }
@@ -83,6 +84,7 @@ export class TurnChanges {
       .map((opening) => ({
         id: opening.id,
         at: fromDbTime(opening.at),
+        jobId: opening.job_id ?? undefined,
         goalIds: repos.reservations.goalIdsOf(opening.id),
         source: opening.source,
       }));
@@ -109,6 +111,10 @@ export class TurnChanges {
 
   findOpening(reservationId: number): WorkingOpening | undefined {
     return this.#openings.get(reservationId);
+  }
+
+  listOpenings(): WorkingOpening[] {
+    return [...this.#openings.values()];
   }
 
   countOpeningsUnderLimit(): number {
@@ -143,6 +149,7 @@ export class TurnChanges {
     this.#openings.set(id, {
       id,
       at: opening.at,
+      jobId: opening.jobId,
       goalIds: opening.goalIds,
       source: opening.source,
     });
@@ -155,6 +162,7 @@ export class TurnChanges {
     this.#openings.set(reservationId, {
       ...opening,
       at: changes.at ?? opening.at,
+      jobId: changes.jobId === undefined ? opening.jobId : (changes.jobId ?? undefined),
       goalIds: changes.goalIds ?? opening.goalIds,
     });
     this.#record({ kind: "updateOpening", reservationId, changes });

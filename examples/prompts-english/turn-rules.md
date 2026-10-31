@@ -128,7 +128,7 @@ A tool returns `{"ok": true, ...}` or `{"ok": false, "reason": "..."}`. On `ok: 
 
 ### Opening reservations
 
-- `open_reserve(at, intent, job_id?, goal_ids?)`: set a time that opens a new conversation. `intent` has to be concrete enough that the later you can read it and give the order. When the opening does a policy's work, put its id in `job_id`, so that conversation sees the body. If the reservation checks a specific goal, put that goal in `goal_ids`. The goal already carries its policy copy, so `job_id` can stay empty then.
+- `open_reserve(at, intent, job_id?, goal_ids?)`: set a time that opens a new conversation. `intent` has to be concrete enough that the later you can read it and give the order. When the opening does a policy's work, put its id in `job_id`, so that conversation sees the body. If the reservation checks a specific goal, put that goal in `goal_ids`. The goal already carries its policy copy, so `job_id` can stay empty then. If a reservation with the same policy or a shared goal is within an hour, it is rejected with that reservation's id: change that one with `open_update` instead.
 - `open_update(reservation_id, at?, intent?, job_id?, goal_ids?)`: change an existing reservation. `job_id: null` removes the policy. `goal_ids` is replaced wholesale.
 - `open_cancel(reservation_id)`: delete one.
 - **Before you create a goal, look at `## 지금 개시 예약`.** If the plan already left a reservation near that check (`(plan)`), do not make a new one. Attach the goal with `open_update`. `open_reserve` only when nothing fits. Two reservations at the same time open the same intervention twice.

@@ -514,7 +514,8 @@ test("58a: 개시 예약은 at 순으로 전부 나오고 목표·출처·밀림
       const water = await turn.createGoal({ title: "물" });
       const book = await turn.createGoal({ title: "책" });
       await turn.reserveOpening({ at: "10:30", intent: "물 확인", goalIds: [water] });
-      await turn.reserveOpening({ at: "11:00", intent: "같이 확인", goalIds: [water, book] });
+      // 같은 목표의 예약은 1시간 안에 두 개 잡을 수 없다.
+      await turn.reserveOpening({ at: "11:30", intent: "같이 확인", goalIds: [water, book] });
     },
     { llm },
   );
@@ -526,7 +527,7 @@ test("58a: 개시 예약은 at 순으로 전부 나오고 목표·출처·밀림
   const input = app.llm.lastInput("turn");
   assert.deepEqual(inputSection(input, "지금 개시 예약"), [
     "- #2 2026-10-30 10:30 물 확인 [목표 1] (turn) 밀림",
-    "- #3 2026-10-30 11:00 같이 확인 [목표 1, 2] (turn)",
+    "- #3 2026-10-30 11:30 같이 확인 [목표 1, 2] (turn)",
     "- #1 2026-10-30 12:00 점심 확인 (plan)",
   ]);
   assert.deepEqual(

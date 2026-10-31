@@ -195,3 +195,66 @@ test("개시 예약 줄에 방침이 붙는다", async (t) => {
     "- #1 2026-10-30 10:30 문제 가져오게 하기 [방침 sample] (plan)",
   ]);
 });
+
+test("open_reserve는 같은 방침이나 겹치는 목표의 예약이 1시간 안에 있으면 그 예약 id와 함께 거부한다", async (t) => {
+  const results: ToolResult[] = [];
+  const llm = new ScriptedLlm()
+    .onPlan((plan) =>
+      plan.finishPlan({ openings: [{ at: "20:30", intent: "문제 하나", jobId: "sample" }] }),
+    )
+    .onTurn(async (turn) => {
+      const reserve = async (at: string, extra: Record<string, unknown> = {}) =>
+        results.push(await turn.use("open_reserve", { at: turn.time(at), intent: at, ...extra }));
+      await reserve("20:45", { job_id: "sample" });
+      await reserve("21:30", { job_id: "sample" });
+      await reserve("20:40", { job_id: "second" });
+      await reserve("20:50");
+      const goalId = await turn.createGoal({ title: "물" });
+      await reserve("15:00", { goal_ids: [goalId] });
+      await reserve("15:30", { goal_ids: [goalId] });
+      return turn.say("응", { continueAfter: { hours: 1 } });
+    });
+  const app = await startApp(t, { ...withSecondJob, llm });
+  await app.user("할 일 줘");
+  await app.advance({ seconds: 20 });
+
+  assert.deepEqual(
+    results.map((result) => (result.ok ? "ok" : result.reason)),
+    [
+      "개시 예약 #1(2026-10-30 20:30 [방침 sample])이 1시간 안에 있다. 새로 만들지 말고 open_update로 고쳐라",
+      "ok",
+      "ok",
+      "ok",
+      "ok",
+      "개시 예약 #5(2026-10-30 15:00)이 1시간 안에 있다. 새로 만들지 말고 open_update로 고쳐라",
+    ],
+  );
+});
+
+test("open_reserve의 중복 검사는 하네스 보정 예약과는 비교하지 않는다", async (t) => {
+  const results: ToolResult[] = [];
+  const llm = new ScriptedLlm().onTurn(
+    async (turn) => {
+      await turn.createGoal({ title: "물" });
+      return turn.end("이따 봐");
+    },
+    async (turn) => {
+      results.push(
+        await turn.use("open_reserve", {
+          at: turn.time("11:10"),
+          intent: "물 확인",
+          goal_ids: [1],
+        }),
+      );
+      return turn.say("11시 10분에 본다", { continueAfter: { hours: 1 } });
+    },
+  );
+  const app = await startApp(t, { llm });
+  await app.user("할 일 줘");
+  await app.advance({ seconds: 20 });
+  await app.user("하나 더");
+  await app.advance({ seconds: 20 });
+
+  assert.equal(app.row("SELECT source FROM reservations WHERE id = 1").source, "harness");
+  assert.deepEqual(results, [{ ok: true, reservation_id: 2, at: "2026-10-30 11:10" }]);
+});
