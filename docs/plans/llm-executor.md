@@ -532,6 +532,10 @@ docs/plans/llm-executor.md          # 이 계획. docs/README.md에서 링크
 
 AI 개시 턴의 첫 지시가 방침 본문 대신 `description` 한 줄만 보고 나가는 문제가 실물에서 나왔다. 개시 예약에 `job_id`를 달고(계획 출력은 필수 키, `open_reserve`·`open_update`는 선택), 그 예약이 연 흐름의 모든 턴이 `## 방침` 바로 뒤의 `## 이번 흐름 방침`에서 그 방침의 설명과 들여쓴 본문을 본다. 흐름 안에서 같은 글이라 prefix 캐시가 산다. 개시 예약 줄에는 `[방침 <id>]`가 붙는다. 정본 §5.1, 테스트 32a–32c(`test/spec/11.04a-opening-job.test.ts`).
 
+## 기억 본문과 goal_create (나중에 더함)
+
+비추론 모델이 도구로만 얻을 수 있는 것을 건너뛰는 구간을 줄였다. 정리·계획 입력의 `## 기억`에 모든 칸 본문이, 턴 입력에는 `turn_memory_sections`에 적은 칸 본문이 `[칸 제목]` 아래 들여써서 들어간다. `goal_create`는 `progress`를 받고 결과로 `job_prompt`를 돌려준다. `max_tool_rounds` 기본값은 4다. 정본 §5.6, §9.5, §9.9.
+
 ## 프롬프트 작성용 계약
 
 `turn-rules.md`·`cleanup-rules.md`를 쓸 때 기준이다. 입력 절과 형식은 위 "입력 배치"와 "정리 입력"이 정본이고, 여기에는 나머지를 모은다.
@@ -557,7 +561,7 @@ AI 개시 턴의 첫 지시가 방침 본문 대신 `description` 한 줄만 보
 |---|---|---|
 | `job_read` | `job_id` | `prompt`(방침 본문) |
 | `memory_read` | `title` | `content` |
-| `goal_create` | `job_id`, `title`, `done_criteria`, `due_at?` | `goal_id` |
+| `goal_create` | `job_id`, `title`, `done_criteria`, `progress?`, `due_at?` | `goal_id`, `job_prompt`(방침 본문) |
 | `goal_update` | `goal_id`, `progress?`, `due_at?` | |
 | `goal_close` | `goal_id`, `result`(`done`·`failed`·`dropped`), `reason` | |
 | `open_reserve` | `at`, `intent`, `job_id?`, `goal_ids?` | `reservation_id`, 보정된 `at` |

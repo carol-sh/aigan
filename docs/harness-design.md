@@ -250,7 +250,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | 항목 | 내용 |
 |---|---|
 | 계기 | 개시(AI·사용자), 이어가기, 흐름 내 사용자 메시지 |
-| 입력 | 턴 규칙 프롬프트, 방침 목록(`id`·`description`), 이번 흐름 방침(이 흐름을 연 개시 예약의 `job_id`가 가리키는 방침의 `description`과 본문), 활성 목표(진행 메모, `job_snapshot`, 그 목표에 걸린 개시 예약 id), 개시 예약 전체(`scheduled`·`fired`, `at` 순. id·`at`·`intent`·`goal_ids`·`job_id`·`source`, `fired`는 "밀림" 표시. AI 개시 턴의 `x`는 뺀다), 오늘 종료된 목표(결과·사유), 오늘 계획(아직 없으면 "(계획 전)"), 직전 흐름 꼬리, 흐름 대화, 직전 흐름 이후 흐름 밖 메시지(최근 `outside_messages_max`개), 이벤트 블록(계기·이 흐름을 연 개시 예약의 `intent`(AI 개시 턴이면 예정 시각 `at`도)·현재 시각·오늘의 끝), 기억(state 전문, 칸 제목 목록) |
+| 입력 | 턴 규칙 프롬프트, 방침 목록(`id`·`description`), 이번 흐름 방침(이 흐름을 연 개시 예약의 `job_id`가 가리키는 방침의 `description`과 본문), 활성 목표(진행 메모, `job_snapshot`, 그 목표에 걸린 개시 예약 id), 개시 예약 전체(`scheduled`·`fired`, `at` 순. id·`at`·`intent`·`goal_ids`·`job_id`·`source`, `fired`는 "밀림" 표시. AI 개시 턴의 `x`는 뺀다), 오늘 종료된 목표(결과·사유), 오늘 계획(아직 없으면 "(계획 전)"), 직전 흐름 꼬리, 흐름 대화, 직전 흐름 이후 흐름 밖 메시지(최근 `outside_messages_max`개), 이벤트 블록(계기·이 흐름을 연 개시 예약의 `intent`(AI 개시 턴이면 예정 시각 `at`도)·현재 시각·오늘의 끝), 기억(state 전문, 칸 제목 목록, `turn_memory_sections`에 적은 칸은 본문까지) |
 | 출력 | 보낼 메시지(0개 이상), 다음(`continue at` \| `end`) |
 | 도구 | `job_read`(id), `memory_read`(title), `goal_create`, `goal_update`(진행 메모·마감), `goal_close`(done/failed/dropped + 사유), `open_reserve`(at, intent, goal_ids), `open_update`(id, at?, intent?, goal_ids?), `open_cancel`(id) |
 
@@ -277,7 +277,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | 항목 | 내용 |
 |---|---|
 | 계기 | 계획 밀림(§6.1) |
-| 입력 | 상위 프롬프트, 방침 목록(`id`·`description`), 활성 목표, 최근 종료 목표(지난 `recent_goal_days`일, 제목·`job_id`·결과·사유·종료 시각. 직전 계획일의 `expired` 목표는 진행 메모도), 기억(state 전문, 칸 제목 목록), 남아 있는 개시 예약 |
+| 입력 | 상위 프롬프트, 방침 목록(`id`·`description`), 활성 목표, 최근 종료 목표(지난 `recent_goal_days`일, 제목·`job_id`·결과·사유·종료 시각. 직전 계획일의 `expired` 목표는 진행 메모도), 기억(state 전문, 칸 제목 목록과 모든 칸 본문), 남아 있는 개시 예약 |
 | 출력 | 계획 본문(자연어), 개시 예약 목록(at, intent, job_id, goal_ids 선택). `job_id`는 키가 필수이고 값은 방침 id 또는 null이다 |
 | 도구 | `memory_read`(title) |
 
@@ -289,7 +289,7 @@ JS 이벤트 루프를 본뜬 단일 루프.
 | 항목 | 내용 |
 |---|---|
 | 계기 | 흐름이 닫힌 직후, 다음 흐름이 열리기 전(§4.2 0번) |
-| 입력 | 정리 규칙 프롬프트, 기억(state 전문, 칸 제목 목록), 그 흐름의 대화 원문, 목표(흐름의 계획일 목표 전체와 `flow_goals`의 목표: 제목·완료 조건·`job_id`·상태·진행 메모·종료 사유, `flow_goals`에 있으면 "이 흐름에서 다룸" 표시), 흐름 정보(개시자·`opened_intent`·시작·종료 시각·종료 사유), 현재 시각 |
+| 입력 | 정리 규칙 프롬프트, 기억(state 전문, 칸 제목 목록과 모든 칸 본문), 그 흐름의 대화 원문, 목표(흐름의 계획일 목표 전체와 `flow_goals`의 목표: 제목·완료 조건·`job_id`·상태·진행 메모·종료 사유, `flow_goals`에 있으면 "이 흐름에서 다룸" 표시), 흐름 정보(개시자·`opened_intent`·시작·종료 시각·종료 사유), 현재 시각 |
 | 출력 | 없음. 도구 효과가 결과다 |
 | 도구 | `memory_read`(title), `state_write`(content), `memory_write`(title, content), `memory_delete`(title) |
 
@@ -347,11 +347,12 @@ prompts/
 
 | 호출 | 입력 | 읽기 | 쓰기 |
 |---|---|---|---|
-| 턴 | state 전문 + 칸 제목 목록 | `memory_read` | 없음 |
-| 계획 | state 전문 + 칸 제목 목록 | `memory_read` | 없음 |
-| 정리 | state 전문 + 칸 제목 목록 | `memory_read` | `state_write`, `memory_write`, `memory_delete` |
+| 턴 | state 전문 + 칸 제목 목록 + `turn_memory_sections`의 칸 본문 | `memory_read` | 없음 |
+| 계획 | state 전문 + 칸 제목 목록 + 모든 칸 본문 | `memory_read` | 없음 |
+| 정리 | state 전문 + 칸 제목 목록 + 모든 칸 본문 | `memory_read` | `state_write`, `memory_write`, `memory_delete` |
 | 압축 | 없음 | 없음 | 없음 |
 
+- **본문을 입력에 넣는 이유**: 비추론 모델은 `memory_read`를 자주 건너뛴다. 정리는 칸을 통째로 다시 쓰므로 본문 없이 쓰면 누적 기록이 사라진다. 그래서 정리와 계획(하루 한 번)에는 모든 칸 본문을, 턴에는 매 턴 판단에 쓰는 칸(`turn_memory_sections`)의 본문만 넣는다. 본문은 `[칸 제목]` 줄 아래에 들여써서 입력 문서의 절 제목과 섞이지 않게 한다. 기억은 정리 때만 바뀌므로 흐름 안의 턴 입력에서는 같은 글이라 prefix 캐시가 산다.
 - 쓰기가 정리 호출뿐이라 원칙 6(메시지 0개 턴의 도구 효과 버림)과 부딪히지 않는다. 흐름 안에서 들은 것은 흐름이 닫힌 뒤에 기록되고, 그때까지는 대화와 진행 메모가 맡는다. 다음 흐름은 정리가 끝난 뒤 열리므로 놓치지 않는다.
 - 쓰기는 통째 교체만 둔다. 덧붙이기가 없어서 쓸 때마다 다시 정리하게 되고, 상한이 압축·병합의 압력이 된다.
 - 사용자가 낸 결과물의 원문은 따로 보관하지 않는다. 필요한 부분은 정리가 분석하면서 칸에 인용한다. 원문은 `messages`에 남아 있으므로 나중에 검색 도구를 붙일 수 있다.
@@ -794,7 +795,7 @@ TurnTx는 도구 효과를 모으고, 이후 도구 라운드는 그 효과가 �
 | 도구 | 거부 조건 | 효과 |
 |---|---|---|
 | `job_read` | 방침 id 없음 | 본문을 돌려준다. 상태를 바꾸지 않으므로 원칙 6과 무관 |
-| `goal_create` | 방침 id 없음, 활성 목표 ≥ `goal_max_active`, `due_at`이 현재 계획일의 깨어 있는 구간 밖 | `active`, `job_snapshot` 복사, `plan_date`=현재 계획일 |
+| `goal_create` | 방침 id 없음, 활성 목표 ≥ `goal_max_active`, `due_at`이 현재 계획일의 깨어 있는 구간 밖 | `active`, `job_snapshot` 복사, `progress`(선택, 단계 계획), `plan_date`=현재 계획일. 결과에 방침 본문(`job_prompt`)을 돌려줘 모델이 `job_read` 없이도 지시 전에 기준을 본다 |
 | `goal_update` | 활성 목표가 아님, `due_at`이 그 목표 계획일의 깨어 있는 구간 밖 | `progress`·`due_at` 갱신 |
 | `goal_close` | 활성 목표가 아님 | `state`, `end_reason`, `closed_at`. 걸린 예약은 건드리지 않는다(사전 검사가 지운다) |
 | `open_reserve` | 없는 `job_id`, `goal_ids`에 활성이 아니거나 지난 계획일의 것, I6 상한, `at`이 그날 끝 이후, 그날 남은 시간 없음 | `kind='open'`, `source='turn'`, `plan_date`=현재 계획일, 앞쪽 클램프(§2.4) |
@@ -940,7 +941,7 @@ out = await llm(ctx)
 | `turn_max_attempts` | 3 | 같은 트리거의 연속 출력 실패가 여기 닿으면 포기(§9.4). 파싱 재시도 1회를 포함하면 호출 6번 |
 | `cleanup_max_attempts` | 5 | |
 | `cleanup_backoff_first_sec` / `cleanup_backoff_cap_sec` | 30 / 300 | |
-| `max_tool_rounds` / `max_cleanup_tool_rounds` | 3 / 5 | 도구 라운드 상한(§5.4) |
+| `max_tool_rounds` / `max_cleanup_tool_rounds` | 4 / 5 | 도구 라운드 상한(§5.4). 목표 하나를 세우는 데 대개 2–3라운드라 한 라운드 여유를 둔다 |
 
 **상한**
 
@@ -957,6 +958,7 @@ out = await llm(ctx)
 | `state_max_chars` | 1000 | §5.6 |
 | `memory_section_max_chars` | 8000 | §5.6 |
 | `memory_max_sections` | 10 | §5.6. 분석 종류 단위의 굵은 칸 기준 |
+| `turn_memory_sections` | (비움) | 턴 입력에 본문까지 넣을 칸 제목(쉼표 구분). 없는 칸은 건너뛴다. 칸 이름은 프롬프트가 정하므로 기본은 비운다(§5.6) |
 
 ### 9.10 CLI
 
