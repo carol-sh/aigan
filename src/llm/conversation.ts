@@ -128,6 +128,7 @@ export class LlmConversation {
       throw new LlmCallError("api: 답에 메시지가 없다", { isOutputFailure: false });
     }
     this.#record(request, completion, sentAt, describeReplyProblem(reply, isForced, parse));
+    this.#ctx.logger.info(formatLlmReply(this.#setup.kind, reply));
     return reply;
   }
 
@@ -168,6 +169,18 @@ export class LlmConversation {
       createdAt: sentAt,
     });
   }
+}
+
+function formatLlmReply(kind: LlmCallKind, reply: ChatCompletionMessage): string {
+  const lines = [`LLM ${kind}`];
+  const content = reply.content?.trim();
+  if (content) lines.push(content);
+  for (const call of reply.tool_calls ?? []) {
+    if (call.type !== "function") continue;
+    lines.push(`tool ${call.function.name} ${call.function.arguments}`);
+  }
+  if (lines.length === 1) lines.push("(내용 없음)");
+  return lines.join("\n");
 }
 
 /** 기록에 남길 실패 사유. 도구를 부른 답은 정상이고, 최종 답은 읽어 보고 정한다. */

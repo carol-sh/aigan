@@ -1,29 +1,29 @@
-# 압축 규칙
+# Compaction
 
-진행 중인 대화가 길어지면 앞부분을 요약으로 바꾼다. 이후 턴은 그 요약을 대화 맨 앞의 `[요약]`으로 보고, 줄인 원문은 다시 오지 않는다. 요약만 보고도 대화를 이어 갈 수 있어야 한다.
+When the open conversation gets long, the older part is replaced by a summary. Later turns see that summary as a `[요약]` line at the front of the transcript, and the raw text you folded in does not come back. The summary alone has to be enough to continue.
 
-## 출력
+## Output
 
-JSON 객체 하나다. `summary`는 비면 안 된다.
+One JSON object. `summary` cannot be empty.
 
 ```json
-{ "summary": "21:00 노트용 문제를 가져오게 함. 사용자: 합이 K인 연속 부분 수열 개수, N ≤ 2×10^5, 음수 있음. 아이디어 1차 '이중 for문' 반려(제약 무시). 2차 '투 포인터' 반려(음수로 단조성 깨짐, 본인이 확인). 3차 '누적합, S[r]-K인 S[l] 개수를 맵으로' 21:18 통과, 힌트 없음. 복잡도 O(N log N) 통과. 21:19 구현과 제출을 지시, 15분." }
+{ "summary": "21:00 had them fetch a notebook problem. User: count of subarrays summing to K, N ≤ 2×10^5, negatives present. Idea 1 'nested loops' rejected (ignored the constraint). Idea 2 'two pointers' rejected (negatives break monotonicity; they said so). Idea 3 'prefix sums, count S[l] = S[r]-K with a map' passed at 21:18, no hint. Complexity O(N log N) passed. 21:19 ordered an implementation and submission, 15 minutes." }
 ```
 
-## 입력
+## Input
 
-`## 기존 요약`(없으면 `(없음)`)과 `## 줄일 대화`.
+`## 기존 요약` (the summary so far, or `(없음)`) and `## 줄일 대화`.
 
-## 쓰는 법
+## How to write it
 
-- **새 요약은 기존 요약을 교체한다.** 기존 요약과 이번에 줄일 대화를 합쳐 하나로 다시 쓴다. 기존 요약에서 빼먹으면 그 내용은 사라진다.
-- 시간 순으로 쓴다. 중요한 시점에는 `HH:mm`을 붙인다.
-- 남길 것:
-  - 무엇을 시켰나. 기준과 제한 시간도.
-  - 사용자가 낸 것의 요지. 숫자, 조건, 핵심 문장은 원문 그대로.
-  - 판정과 그 근거. 반려 횟수, 스스로 찾았는지.
-  - 아직 남은 지시와 약속, 그 시각.
-  - 핑계, 앞뒤가 안 맞는 말.
-- 버릴 것: 인사, 같은 재촉의 반복 문구, 이미 끝난 단계의 문답.
-- 대화에 없는 판정을 요약에 더하지 않는다. 말한 것만 쓴다.
-- 길이는 줄일 대화의 5분의 1 안팎.
+- **The new summary replaces the old one.** Merge the old summary with the stretch you are folding, and write one text. Anything you drop from the old summary is gone.
+- Keep time order. Put `HH:mm` on the moments that matter.
+- Keep:
+  - What you ordered, including the bar and the time limit.
+  - The gist of what they produced. Numbers, conditions, and the key sentences stay verbatim.
+  - Your judgment and why. How many rejections, and whether they found it themselves. Keep the sentence you sent, so the next reply can see which strike was just used.
+  - Orders and promises still open, and their times.
+  - Excuses, and claims that do not match each other.
+- Drop greetings, repeated nudge wording, and the back-and-forth of a step that is already over.
+- Do not add a judgment that was not in the talk. Write only what was said.
+- Aim for about a fifth the length of the stretch you are folding.

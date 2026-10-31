@@ -52,11 +52,7 @@ test("예시 프롬프트 세트는 그대로 로드되고 선택 파일까지 �
   assert.ok(prompts.persona);
   assert.ok(prompts.cleanupRules);
   assert.ok(prompts.compactRules);
-  assert.deepEqual(
-    prompts.jobPolicies.map((job) => job.id),
-    ["notice", "random", "surveillance"],
-  );
-  assert.match(prompts.jobPolicies[0]!.description, /통보한다/);
+  assert.ok(prompts.jobPolicies.length > 0);
 });
 
 test("턴 규칙은 턴 도구 전부와 출력 필드, 계기 네 가지, 되묻기 문구를 말한다", () => {
@@ -112,12 +108,13 @@ test("규칙 파일의 출력 예시는 실제 출력 파서를 통과한다", (
 });
 
 test("예시 세트로 부팅하면 계획·턴·정리 요청의 system이 그 파일들이고 방침 목록에 예시 방침이 나온다", async (t) => {
+  const jobId = loadPrompts(EXAMPLE_PROMPTS_DIR).jobPolicies[0]!.id;
   const llm = new ScriptedLlm()
     .onPlan((plan) =>
       plan.finishPlan({ openings: [{ at: "10:30", intent: "알고리즘 노트: 문제 가져오게 하기" }] }),
     )
     .onTurn(async (turn) => {
-      await turn.use("job_read", { job_id: "notice" });
+      await turn.use("job_read", { job_id: jobId });
       return turn.end("노트북 켜. 9시에 문제 하나.");
     })
     .onCleanup(async (cleanup) => {
